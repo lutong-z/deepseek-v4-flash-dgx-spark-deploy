@@ -441,6 +441,25 @@ class DeploymentEngine:
 
     def update(self, state_file: Path) -> None:
         self.apply(state_file, update=True)
+    def _remove_rollback_targets(self, roles: Mapping[str, Any]) -> None:
+        """Remove only an exact current/old pair while recovering a partial update."""
+        for role in _role_order():
+            inspect = self._inspect(role, allow_missing=True)
+            if inspect is None:
+                continue
+            old = roles[role]
+            actual_name = str(inspect.get("Name", "")).lstrip("/")
+            actual_image = str(inspect.get("Image", ""))
+            current_image = str(self.contracts[role]["image"]["image_id"])
+            _fail(actual_name != str(old["name"]), f"rollback found an unexpected {role} name")
+            _fail(actual_image not in {str(old["image"]), current_image}, f"rollback found an unexpected {role} image")
+            actual_command = _command(inspect, f"rollback {role}")
+            _fail(actual_command not in {tuple(str(item) for item in old["command"]), tuple(str(item) for item in self.contracts[role]["service_argv"])}, f"rollback found an unexpected {role} command")
+            state = inspect.get("State")
+            if isinstance(state, Mapping) and bool(state.get("Running")):
+                self._remote(role, ["docker", "container", "stop", "--time", "30", str(old["name"])])
+            self._remote(role, ["docker", "container", "rm", str(old["name"])])
+
 
     def rollback(self, state_file: Path) -> None:
         """Restore exact captured commands/images, refusing incomplete state."""
@@ -466,8 +485,7 @@ class DeploymentEngine:
         for role in _role_order():
             old = roles[role]
             self._remote(role, ["docker", "image", "inspect", str(old["image"])])
-        self._stop_owned()
-        self._remove_owned()
+        self._remove_rollback_targets(roles)
         for role in _role_order():
             old = roles[role]
             create = ["docker", "container", "create", "--name", str(old["name"])]
@@ -500,6 +518,11 @@ class DeploymentEngine:
                 create.extend(["--ulimit", f"{lname}={soft}:{hard}"])
             if bool(host_config.get("readonly_rootfs")):
                 create.append("--read-only")
+            labels = old["labels"]
+            _fail(not isinstance(labels, Mapping), f"rollback {role} labels are malformed")
+            for key, value in sorted(labels.items()):
+                _fail(not isinstance(key, str) or not key or not isinstance(value, str) or not value, f"rollback {role} label is malformed")
+                create.extend(["--label", f"{key}={value}"])
             environment = old["environment"]
             _fail(not isinstance(environment, list), f"rollback {role} environment is malformed")
             for value in environment:
