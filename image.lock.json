@@ -42,12 +42,12 @@
     "config_digest": null,
     "image_id": null,
     "role_image_ids": {
-      "head": "sha256:d85fcb025139bdf5e91a71fc5d2a7a3d71f822881eaded812fb0f618a8b35f9b",
-      "worker": "sha256:94d6e10a7b35ac32fee3d5c0cff0e5239343755d5fdd3d8a32bf88159f912cae"
+      "head": "sha256:3de518818a9cd0eb5d44473bf30e3e9766b8a13c35ebb79349fa372c11ce9535",
+      "worker": "sha256:cbc26665c7a6739043ad1596940840acbfffafd43ecec6cb5289053841b0e4fc"
     },
     "role_repo_digests": {
       "head": null,
-      "worker": "candidate/dsv4-native432-dspark5@sha256:94d6e10a7b35ac32fee3d5c0cff0e5239343755d5fdd3d8a32bf88159f912cae"
+      "worker": "candidate/dsv4-native432-dspark5@sha256:cbc26665c7a6739043ad1596940840acbfffafd43ecec6cb5289053841b0e4fc"
     },
     "archive_sha256": null
   },
