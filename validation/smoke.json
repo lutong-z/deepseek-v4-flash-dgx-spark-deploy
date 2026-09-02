@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "mode": "synthetic",
+  "payload": {
+    "messages": [{"role": "user", "content": "Reply with the marker DGX-SPARK-SMOKE."}],
+    "temperature": 0,
+    "max_tokens": 16,
+    "stream": false
+  },
+  "gates": [
+    "deterministic completion",
+    "tokenizer round trip",
+    "reasoning parser separation",
+    "tool-call JSON parsing",
+    "prefix hash identity",
+    "DSpark K5 acceptance",
+    "streaming equivalence"
+  ],
+  "result_policy": "write only redacted summaries under external RESULT_ROOT"
+}

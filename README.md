@@ -1,0 +1,72 @@
+# Generic two-node DGX Spark deployment
+
+This is a clean, local-only scaffold for a generic two-node ARM64 DGX Spark
+service. It contains a validated service profile, strict configuration
+parsing, deterministic command rendering, redaction helpers, and fail-closed
+operation boundaries. It does not contain model data, image layers, host
+inventories, SSH configuration, evidence, or operator automation.
+
+No public remote is configured by this checkpoint. No command in the scaffold
+connects to a host, changes networking, pulls or pushes an image, starts or
+stops a container, or changes production state. Mutating CLI flags are rejected
+until the reviewed source/build/service contract is supplied and the lifecycle
+implementation passes its separate gates.
+
+## Safe start
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+python -m dgx_deploy.cli --help
+python -m dgx_deploy.cli config render --env-file /path/to/operator.env
+python -m dgx_deploy.cli plan --env-file /path/to/operator.env
+```
+
+The environment file is never sourced as shell. It accepts only comments,
+blank lines, and unique `KEY=VALUE` records. Keep the file outside this
+checkout. The renderer rejects unknown keys, duplicate keys, shell syntax,
+control characters, unresolved values, mutable image tags, path traversal,
+port collisions, and public API binding by default.
+
+Use `.env.example` as a key reference only. It contains no site hosts,
+credentials, image IDs, model files, or private addresses. Fill an operator
+copy with explicit values for the control plane, RoCE data plane, model
+manifest, immutable image, and external state roots.
+
+## Fixed service profile
+
+`config/profiles/dsv4-native432-b12x-tp2.json` is an immutable contract for:
+
+- two ARM64 DGX Spark GB10 nodes, tensor parallel size 2, rank 1 first;
+- B12X MLA target attention with native DSV4 NVFP4 432-byte records;
+- FP8 DSpark K5 draft cache and SHA-256 prefix hashing;
+- maximum model length 327,680, maximum sequences 5, and batch budget 1,024;
+- asynchronous scheduling disabled and CUDA Graph mode fixed by the profile;
+- read-only model mount and external, identity-namespaced cache/state roots;
+- validated tokenizer, reasoning parser, tool parser, and chat-template contract.
+
+The profile does not prove that a runtime image implements the contract. Exact
+source revisions, dependency hashes, image labels, model manifest, and service
+contract must be supplied by a separately reviewed sanitized build lock.
+
+## Repository map
+
+- `bin/`: stable operator entry point.
+- `config/`: deployment and immutable service/image schemas and profile.
+- `container/`: build contract inputs; no image layer or credential is stored.
+- `dgx_deploy/`: parsing, validation, hashes, redaction, and argv rendering.
+- `scripts/`: explicitly disabled lifecycle entry points until implementation
+  gates are met; they never fall back to arbitrary shell commands.
+- `validation/`: synthetic redacted gate definitions only.
+- `tests/`: deterministic local contract tests and a dry-run smoke script.
+- `docs/`: deployment, image, networking, and rollback contracts.
+
+## Public release boundary
+
+Only generic source, schemas, deterministic tests, and reviewed documentation
+belong in a public repository. Exclude environment files, SSH keys and host
+records, model/tokenizer/weight data, image archives and IDs, logs, prompts,
+responses, metrics, profiler captures, local state, and Mac launch-control or
+OMP automation. Review upstream licenses and patch attribution before adding
+runtime source or build inputs.

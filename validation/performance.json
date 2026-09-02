@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "mode": "synthetic",
+  "seed": 42,
+  "warmups": 2,
+  "repetitions": 5,
+  "lanes": ["prefill", "decode", "concurrency", "prefix-hit", "prefix-miss"],
+  "metrics": [
+    "time_to_first_token_seconds",
+    "inter_token_latency_ms",
+    "output_tokens_per_second",
+    "request_errors",
+    "prefix_hits",
+    "prefix_misses",
+    "speculative_acceptance",
+    "cuda_graph_replays",
+    "nccl_transport"
+  ],
+  "thresholds": "supplied outside Git by the operator",
+  "result_policy": "write only redacted summaries under external RESULT_ROOT"
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dgx-spark-deepseek-v4-deploy/image-lock.schema.json",
+  "title": "Reviewed immutable image build lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "architecture", "base_image_ref", "source_revision", "dependency_lock_sha256", "service_contract_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "architecture": {"const": "linux/arm64"},
+    "base_image_ref": {"type": "string", "pattern": "^[A-Za-z0-9._:/-]+@sha256:[0-9a-f]{64}$"},
+    "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "dependency_lock_sha256": {"$ref": "#/$defs/sha256"},
+    "service_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "patches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "sha256"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$"},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

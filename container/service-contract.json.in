@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "service": "deepseek-v4-flash",
+  "profile_id": "dsv4-native432-b12x-tp2",
+  "architecture": "linux/arm64",
+  "target_attention": "B12X_MLA_SPARSE",
+  "target_kv_cache": "nvfp4_ds_mla",
+  "target_record_bytes": 432,
+  "draft": {
+    "method": "dspark",
+    "num_speculative_tokens": 5,
+    "attention_backend": "B12X_MLA_SPARSE",
+    "kv_cache_dtype": "fp8"
+  },
+  "prefix_hash": "sha256",
+  "async_scheduling": false,
+  "cuda_graph": {"enabled": true, "mode": "FULL_AND_PIECEWISE"},
+  "source_revision": "${SOURCE_REVISION}",
+  "profile_sha256": "${PROFILE_SHA256}",
+  "service_contract_sha256": "${SERVICE_CONTRACT_SHA256}"
+}

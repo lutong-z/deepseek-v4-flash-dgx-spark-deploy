@@ -1,0 +1,13 @@
+# The build wrapper requires BASE_IMAGE_REF to be an explicit immutable digest.
+# This file intentionally carries no registry, model, credential, or image data.
+ARG BASE_IMAGE_REF
+FROM ${BASE_IMAGE_REF}
+
+ARG SERVICE_CONTRACT_SHA256
+ARG PROFILE_SHA256
+LABEL org.opencontainers.image.title="DGX Spark DeepSeek V4 service"
+LABEL com.dgx-spark.architecture="linux/arm64"
+LABEL com.dgx-spark.service_contract_sha256="${SERVICE_CONTRACT_SHA256}"
+LABEL com.dgx-spark.profile_sha256="${PROFILE_SHA256}"
+
+COPY service-contract.json.in /etc/dgx-spark/service-contract.json

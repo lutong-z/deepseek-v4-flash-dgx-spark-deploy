@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dgx-spark-deepseek-v4-deploy/deployment.schema.json",
+  "title": "DGX Spark deployment configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "deployment"],
+  "properties": {
+    "profile": {"$ref": "service-profile.schema.json"},
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head_host", "worker_host", "ssh_user", "head_ssh_user", "worker_ssh_user",
+        "ssh_port", "ssh_known_hosts_file", "ssh_identity_file", "remote_root", "model_root",
+        "model_manifest_sha256", "state_root", "cache_root", "log_root", "result_root",
+        "registry", "image_ref", "master_addr", "master_port", "api_port", "head_node_addr",
+        "worker_node_addr", "head_net_iface", "worker_net_iface", "head_hca", "worker_hca",
+        "head_cuda_visible_devices", "worker_cuda_visible_devices", "roce_gid_index", "roce_mtu",
+        "api_bind_addr", "forward_local_port"
+      ],
+      "properties": {
+        "head_host": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
+        "worker_host": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
+        "ssh_user": {"type": ["string", "null"]},
+        "head_ssh_user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},
+        "worker_ssh_user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},
+        "ssh_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "ssh_known_hosts_file": {"type": "string", "pattern": "^/[^\\x00-\\x1f\\x7f]*$"},
+        "ssh_identity_file": {"type": ["string", "null"]},
+        "remote_root": {"$ref": "#/$defs/absolutePath"},
+        "model_root": {"$ref": "#/$defs/absolutePath"},
+        "model_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "state_root": {"$ref": "#/$defs/absolutePath"},
+        "cache_root": {"$ref": "#/$defs/absolutePath"},
+        "log_root": {"type": ["string", "null"]},
+        "result_root": {"$ref": "#/$defs/absolutePath"},
+        "registry": {"type": ["string", "null"]},
+        "image_ref": {"type": "string", "pattern": "^(?:[A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}$"},
+        "master_addr": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
+        "master_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "api_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "head_node_addr": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
+        "worker_node_addr": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
+        "head_net_iface": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*$"},
+        "worker_net_iface": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*$"},
+        "head_hca": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*$"},
+        "worker_hca": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*$"},
+        "head_cuda_visible_devices": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*$"},
+        "worker_cuda_visible_devices": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*$"},
+        "roce_gid_index": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
+        "roce_mtu": {"type": "integer", "minimum": 576, "maximum": 65535},
+        "api_bind_addr": {"enum": ["127.0.0.1", "::1"]},
+        "forward_local_port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/(?!$)[A-Za-z0-9._/-]+$",
+      "not": {"pattern": "(^|/)\\.\\.?(/|$)"}
+    }
+  }
+}

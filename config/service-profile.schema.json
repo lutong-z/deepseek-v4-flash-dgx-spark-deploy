@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dgx-spark-deepseek-v4-deploy/service-profile.schema.json",
+  "title": "Immutable DeepSeek V4 service profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile_id", "platform", "topology", "model", "service", "limits", "parsing", "container", "security"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$"},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "accelerator", "nodes"],
+      "properties": {
+        "architecture": {"const": "linux/arm64"},
+        "accelerator": {"const": "GB10"},
+        "nodes": {"const": 2}
+      }
+    },
+    "topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tensor_parallel_size", "pipeline_parallel_size", "nnodes", "head_rank", "worker_rank", "worker_first"],
+      "properties": {
+        "tensor_parallel_size": {"const": 2},
+        "pipeline_parallel_size": {"const": 1},
+        "nnodes": {"const": 2},
+        "head_rank": {"const": 0},
+        "worker_rank": {"const": 1},
+        "worker_first": {"const": true}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "served_model_name", "container_path"],
+      "properties": {
+        "family": {"const": "DeepSeek-V4-Flash"},
+        "served_model_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"},
+        "container_path": {"const": "/models"}
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attention_backend", "moe_backend", "target_kv_cache_dtype", "block_size", "compact_layout", "draft_config_json", "prefix_caching", "async_scheduling", "cuda_graph"],
+      "properties": {
+        "attention_backend": {"const": "B12X_MLA_SPARSE"},
+        "moe_backend": {"const": "b12x"},
+        "target_kv_cache_dtype": {"const": "nvfp4_ds_mla"},
+        "block_size": {"const": 256},
+        "compact_layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["abi", "record_bytes"],
+          "properties": {"abi": {"const": "dsv4-native432-compact-v1"}, "record_bytes": {"const": 432}}
+        },
+        "draft_config_json": {"type": "string", "pattern": "^\\{.*\\}$"},
+        "prefix_caching": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "hash_algorithm"],
+          "properties": {"enabled": {"const": true}, "hash_algorithm": {"const": "sha256"}}
+        },
+        "async_scheduling": {"const": false},
+        "cuda_graph": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "mode"],
+          "properties": {"enabled": {"const": true}, "mode": {"const": "FULL_AND_PIECEWISE"}}
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_model_len", "max_num_seqs", "max_num_batched_tokens"],
+      "properties": {
+        "max_model_len": {"const": 327680},
+        "max_num_seqs": {"const": 5},
+        "max_num_batched_tokens": {"const": 1024}
+      }
+    },
+    "parsing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokenizer_mode", "tool_call_parser", "reasoning_parser"],
+      "properties": {
+        "tokenizer_mode": {"const": "deepseek_v4"},
+        "tool_call_parser": {"const": "deepseek_v4"},
+        "reasoning_parser": {"const": "deepseek_v4"}
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name_prefix", "read_only_root", "no_new_privileges"],
+      "properties": {
+        "name_prefix": {"const": "dsv4-candidate-"},
+        "read_only_root": {"const": true},
+        "no_new_privileges": {"const": true}
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["production_change_allowed", "api_bind_default", "model_mount_read_only"],
+      "properties": {
+        "production_change_allowed": {"const": false},
+        "api_bind_default": {"enum": ["127.0.0.1", "::1"]},
+        "model_mount_read_only": {"const": true}
+      }
+    }
+  }
+}

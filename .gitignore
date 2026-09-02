@@ -1,0 +1,59 @@
+# Operator configuration and external state
+.env
+.env.*
+!.env.example
+/state/
+/state-*/
+/results/
+/logs/
+/cache/
+/artifacts/
+
+# Python and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.venv-*/
+.coverage
+htmlcov/
+
+# Credentials and host-control material
+*.pem
+*.key
+*.crt
+*.pub
+**/.ssh/
+**/known_hosts
+**/authorized_keys
+**/*.plist
+**/*launchctl*
+**/*launchd*
+**/.omp/
+**/.omp-*/
+
+# Model, image, and profiler data
+models/
+checkpoints/
+weights/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.tar
+*.tar.gz
+*.oci
+*.img
+*.nsys-rep
+*.ncu-rep
+*.trace
+*.sqlite*
+*.log
+*.jsonl
+
+# OS/editor noise
+.DS_Store
+*~

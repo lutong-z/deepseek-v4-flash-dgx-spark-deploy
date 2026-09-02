@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "profile_id": "dsv4-native432-b12x-tp2",
+  "platform": {
+    "architecture": "linux/arm64",
+    "accelerator": "GB10",
+    "nodes": 2
+  },
+  "topology": {
+    "tensor_parallel_size": 2,
+    "pipeline_parallel_size": 1,
+    "nnodes": 2,
+    "head_rank": 0,
+    "worker_rank": 1,
+    "worker_first": true
+  },
+  "model": {
+    "family": "DeepSeek-V4-Flash",
+    "served_model_name": "deepseek-v4-flash-0731",
+    "container_path": "/models"
+  },
+  "service": {
+    "attention_backend": "B12X_MLA_SPARSE",
+    "moe_backend": "b12x",
+    "target_kv_cache_dtype": "nvfp4_ds_mla",
+    "block_size": 256,
+    "compact_layout": {
+      "abi": "dsv4-native432-compact-v1",
+      "record_bytes": 432
+    },
+    "draft_config_json": "{\"method\":\"dspark\",\"num_speculative_tokens\":5,\"attention_backend\":\"B12X_MLA_SPARSE\",\"kv_cache_dtype\":\"fp8\"}",
+    "prefix_caching": {
+      "enabled": true,
+      "hash_algorithm": "sha256"
+    },
+    "async_scheduling": false,
+    "cuda_graph": {
+      "enabled": true,
+      "mode": "FULL_AND_PIECEWISE"
+    }
+  },
+  "limits": {
+    "max_model_len": 327680,
+    "max_num_seqs": 5,
+    "max_num_batched_tokens": 1024
+  },
+  "parsing": {
+    "tokenizer_mode": "deepseek_v4",
+    "tool_call_parser": "deepseek_v4",
+    "reasoning_parser": "deepseek_v4"
+  },
+  "container": {
+    "name_prefix": "dsv4-candidate-",
+    "read_only_root": true,
+    "no_new_privileges": true
+  },
+  "security": {
+    "production_change_allowed": false,
+    "api_bind_default": "127.0.0.1",
+    "model_mount_read_only": true
+  }
+}
