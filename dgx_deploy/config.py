@@ -136,7 +136,10 @@ def parse_env_file(path: Path) -> dict[str, str]:
         _reject(key not in ALLOWED_KEYS, f"line {line_number}: unknown key {key}")
         _reject(key in values, f"line {line_number}: duplicate key {key}")
         _reject(value != value.strip(), f"line {line_number}: surrounding value whitespace is not allowed")
-        _reject(not _SAFE_VALUE.fullmatch(value), f"line {line_number}: control character is not allowed")
+        if value:
+            _reject(not _SAFE_VALUE.fullmatch(value), f"line {line_number}: control character is not allowed")
+        else:
+            _reject(key not in OPTIONAL_EMPTY_KEYS, f"line {line_number}: empty value is not allowed")
         _reject(_SHELL_SYNTAX.search(value) is not None, f"line {line_number}: shell syntax is not allowed")
         _reject(_PLACEHOLDER.search(value) is not None, f"line {line_number}: unresolved placeholder")
         values[key] = value

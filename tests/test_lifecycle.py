@@ -7,9 +7,9 @@ from pathlib import Path
 
 from dgx_deploy.cli import main
 from dgx_deploy.config import ConfigError, DEFAULT_PROFILE, load_config
-from dgx_deploy.lifecycle import verify_container_inspect
+from dgx_deploy.lifecycle import DeploymentEngine, verify_container_inspect
 from dgx_deploy.locks import load_deployment_lock
-from dgx_deploy.remote import ssh_argv
+from dgx_deploy.remote import CommandResult, ssh_argv
 from dgx_deploy.render import render_contract, render_service_argv
 from test_config import valid_env, write_env
 
@@ -149,6 +149,36 @@ class LifecycleContractTests(unittest.TestCase):
             inspect["Config"]["Cmd"][-1] = "drift"
             with self.assertRaises(Exception):
                 verify_container_inspect(inspect, contract)
+        finally:
+            env_path.unlink()
+            lock_path.unlink()
+
+    def test_preflight_uses_supported_ibdev2netdev_flag(self) -> None:
+        env_path = write_env(self._candidate_values())
+        lock_path = Path(tempfile.mktemp(prefix="deployment-lock-", suffix=".json"))
+        try:
+            config = load_config(env_path, DEFAULT_PROFILE)
+            lock = self._lock(lock_path, config)
+            seen: list[tuple[str, ...]] = []
+
+            def runner(role: str, argv: tuple[str, ...]) -> CommandResult:
+                seen.append(argv)
+                if argv[:3] == ("docker", "image", "inspect"):
+                    image = lock["images"][role]
+                    return CommandResult(
+                        argv,
+                        0,
+                        json.dumps({"Id": image["image_id"], "Architecture": "arm64", "Config": {"Labels": image["labels"]}}),
+                        "",
+                    )
+                if argv[0] == "cat":
+                    return CommandResult(argv, 0, config["deployment"]["model_manifest_sha256"], "")
+                return CommandResult(argv, 0, "", "")
+
+            engine = DeploymentEngine(config, lock, runner=runner)
+            engine.preflight()
+            self.assertEqual(sum(command[:1] == ("ibdev2netdev",) for command in seen), 2)
+            self.assertTrue(all(command[1:] == ("-v",) for command in seen if command[0] == "ibdev2netdev"))
         finally:
             env_path.unlink()
             lock_path.unlink()

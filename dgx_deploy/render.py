@@ -367,9 +367,24 @@ def render_contract(config: Mapping[str, Any], role: str, lock: Mapping[str, Any
         "container_argv": render_container_argv(config, role, lock),
         "contract_path": _remote_contract_path(config, role),
     }
-    digest_input = dict(base)
-    computed = hashlib.sha256(canonical_json(digest_input).encode("utf-8")).hexdigest()
-    base["service_contract_sha256"] = computed
+    digest_input = {
+        key: base[key]
+        for key in (
+            "schema_version",
+            "mode",
+            "profile_id",
+            "role",
+            "node_addr",
+            "api_port",
+            "master_addr",
+            "master_port",
+            "model_path",
+            "model_manifest_sha256",
+            "environment",
+            "service_argv",
+        )
+    }
+    base["service_contract_sha256"] = hashlib.sha256(canonical_json(digest_input).encode("utf-8")).hexdigest()
     return base
 
 

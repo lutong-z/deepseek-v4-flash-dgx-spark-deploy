@@ -14,12 +14,31 @@ class ContractError(ValueError):
     """A rendered service contract is incomplete or has drifted."""
 
 
-def service_contract_sha256(contract: Mapping[str, Any]) -> str:
-    """Hash the contract excluding its self-referential digest field."""
+def _hash_input(contract: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: contract[key]
+        for key in (
+            "schema_version",
+            "mode",
+            "profile_id",
+            "role",
+            "node_addr",
+            "api_port",
+            "master_addr",
+            "master_port",
+            "model_path",
+            "model_manifest_sha256",
+            "environment",
+            "service_argv",
+        )
+        if key in contract
+    }
 
-    value = dict(contract)
-    value.pop("service_contract_sha256", None)
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+def service_contract_sha256(contract: Mapping[str, Any]) -> str:
+    """Hash the contract excluding its self-referential digest fields."""
+
+    return hashlib.sha256(canonical_json(_hash_input(contract)).encode("utf-8")).hexdigest()
 
 
 def validate_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
@@ -63,9 +82,7 @@ def validate_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
     # A lock supplied by the image build may intentionally own the digest.  In
     # that case render_contract already made it the source of truth; the
     # structural check remains here for contracts read back from disk.
-    value = dict(contract)
-    value.pop("service_contract_sha256", None)
-    computed = hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+    computed = service_contract_sha256(contract)
     if digest != computed:
         raise ContractError("service contract hash does not match canonical content")
     return dict(contract)

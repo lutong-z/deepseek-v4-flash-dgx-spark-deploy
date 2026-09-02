@@ -179,6 +179,8 @@ class DeploymentEngine:
         self.records: list[OperationRecord] = []
         self.contracts = {role: render_contract(config, role, self.lock) for role in ("worker", "head")}
         self._validate_contracts()
+
+    def _validate_contracts(self) -> None:
         expected = (29619, 8101) if self.mode == "production" else (29621, 18101)
         _fail(int(self.deployment["master_port"]) != expected[0], "master port does not match mode isolation")
         _fail(int(self.deployment["api_port"]) != expected[1], "API port does not match mode isolation")
@@ -232,7 +234,7 @@ class DeploymentEngine:
         actual_name = str(inspect.get("Name", "")).lstrip("/")
         _fail(actual_name != contract["container"], f"refusing to mutate unexpected {role} container")
 
-    def preflight(self) -> None:
+    def preflight(self, *, require_model_marker: bool = True) -> None:
         """Check Docker/image/model/GPU/RDMA/network prerequisites on both nodes."""
 
         for role in _role_order():
@@ -243,14 +245,20 @@ class DeploymentEngine:
             iface = str(self.deployment[f"{role}_net_iface"]).split(",", 1)[0]
             self._remote(role, ["ip", "link", "show", iface])
             hca = str(self.deployment[f"{role}_hca"]).split(",", 1)[0]
-            self._remote(role, ["ibdev2netdev", "--verbose"])
+            self._remote(role, ["ibdev2netdev", "-v"])
             image_result = self._remote(role, ["docker", "image", "inspect", "--format", "{{json .}}", str(contract["image"]["reference"])])
             _fail(not image_result.stdout.strip(), f"{role} image inspect returned no data")
             image_object = _inspect_object(_json_stdout(image_result, f"{role} image inspect"), f"{role} image inspect")
             verify_image_inspect(image_object, contract["image"], role)
-            marker = str(Path(str(self.deployment["model_root"])) / ".dgx-spark-model-manifest.sha256")
-            marker_result = self._remote(role, ["cat", marker])
-            _fail(marker_result.stdout.strip() != str(self.deployment["model_manifest_sha256"]), f"{role} model manifest marker does not match model lock")
+            marker = str(Path(str(self.deployment["model_root"])) / ".model-lock.sha256")
+            try:
+                marker_result = self._remote(role, ["cat", marker])
+            except LifecycleError:
+                if require_model_marker:
+                    raise
+                marker_result = None
+            if marker_result is not None:
+                _fail(marker_result.stdout.strip() != str(self.deployment["model_manifest_sha256"]), f"{role} model manifest marker does not match model lock")
             self._remote(role, ["test", "-r", str(self.deployment["model_root"])])
             self._remote(role, ["test", "-n", hca])
 
@@ -301,6 +309,7 @@ class DeploymentEngine:
 
     def _stage(self) -> None:
         remote_root = str(self.deployment["remote_root"])
+        remote_model_marker = str(Path(str(self.deployment["model_root"])) / ".model-lock.sha256")
         for role in _role_order():
             contract = self.contracts[role]
             cache_root = Path(str(self.deployment["cache_root"])) / ("dgx0" if role == "head" else "dgx1")
@@ -310,32 +319,23 @@ class DeploymentEngine:
             with tempfile.TemporaryDirectory(prefix="dgx-deploy-") as directory:
                 contract_path = Path(directory) / f"{role}.json"
                 env_path = Path(directory) / f"{role}.env"
+                marker_path = Path(directory) / "model.lock.sha256"
+                marker_path.write_text(str(self.deployment["model_manifest_sha256"]) + "\n", encoding="ascii")
                 contract_path.write_text(contract_json(self.config, role, self.lock), encoding="utf-8")
                 env_path.write_text("".join(f"{key}={value}\n" for key, value in render_environment(self.config, role).items()), encoding="utf-8")
                 ssh = dict(self.deployment)
-                self._scp(
-                    scp_argv(
-                        str(contract_path),
-                        str(ssh[f"{role}_host"]),
-                        str(ssh[f"{role}_ssh_user"]),
-                        int(ssh["ssh_port"]),
-                        str(ssh["ssh_known_hosts_file"]),
-                        remote_contract,
-                        identity_file=ssh.get("ssh_identity_file") or None,
+                for source, destination in (
+                    (contract_path, remote_contract),
+                    (env_path, remote_env),
+                    (marker_path, remote_model_marker),
+                ):
+                    self._scp(
+                        scp_argv(
+                            str(source), str(ssh[f"{role}_host"]), str(ssh[f"{role}_ssh_user"]),
+                            int(ssh["ssh_port"]), str(ssh["ssh_known_hosts_file"]), destination,
+                            identity_file=ssh.get("ssh_identity_file") or None,
+                        )
                     )
-                )
-                self._scp(
-                    scp_argv(
-                        str(env_path),
-                        str(ssh[f"{role}_host"]),
-                        str(ssh[f"{role}_ssh_user"]),
-                        int(ssh["ssh_port"]),
-                        str(ssh["ssh_known_hosts_file"]),
-                        remote_env,
-                        identity_file=ssh.get("ssh_identity_file") or None,
-                    )
-                )
-
     def _stop_owned(self) -> None:
         for role in _role_order():
             inspect = self._inspect(role, allow_missing=True)
