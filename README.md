@@ -34,6 +34,23 @@ credentials, image IDs, model files, or private addresses. Fill an operator
 copy with explicit values for the control plane, RoCE data plane, model
 manifest, immutable image, and external state roots.
 
+## Pinned model lock
+
+`model.lock.json` pins the public `deepseek-ai/DeepSeek-V4-Flash-0731`
+repository to commit
+`7872f01b1d1fe23eabc4c98b48bffcef5a386062` under the MIT license. The lock
+contains the public Hugging Face tree metadata for the 48 safetensors shards,
+their sizes and LFS SHA-256 values, plus Git blob SHA-1 values for metadata
+files whose public tree records do not expose SHA-256 values. It also fixes
+the official `generation_config.json` defaults (`do_sample: true`,
+`temperature: 1.0`, `top_p: 1.0`) and records that no Jinja chat template is
+present.
+
+The model is approximately 166.9 GB and is intentionally **not** included in
+this repository. No fetch is performed by tests or by importing the scripts.
+See [`docs/model.md`](docs/model.md) for the lock, fetch, and verification
+contract.
+
 ## Fixed service profile
 
 `config/profiles/dsv4-native432-b12x-tp2.json` is an immutable contract for:
@@ -63,11 +80,12 @@ local logs or silently supplied as operator overrides.
 - `config/`: deployment and immutable service/image schemas and profile.
 - `container/`: build contract inputs; no image layer or credential is stored.
 - `dgx_deploy/`: parsing, validation, hashes, redaction, and argv rendering.
-- `scripts/`: explicitly disabled lifecycle entry points until implementation
-  gates are met; they never fall back to arbitrary shell commands.
+- `scripts/`: lock-gated model fetch/verification plus explicitly disabled
+  deployment lifecycle entry points; no script falls back to arbitrary shell
+  commands.
 - `validation/`: synthetic redacted gate definitions only.
 - `tests/`: deterministic local contract tests and a dry-run smoke script.
-- `docs/`: deployment, image, networking, and rollback contracts.
+- `docs/`: deployment, image, networking, model, and rollback contracts.
 
 ## Public release boundary
 

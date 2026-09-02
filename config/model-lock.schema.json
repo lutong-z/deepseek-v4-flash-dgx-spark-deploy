@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dgx-spark-deepseek-v4-deploy/model-lock.schema.json",
+  "title": "Immutable Hugging Face model lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "model",
+    "provenance",
+    "license",
+    "generation_config",
+    "chat_template",
+    "tokenizer",
+    "weights",
+    "install",
+    "totals",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_id", "revision", "library_name", "model_type", "architecture", "config_path"],
+      "properties": {
+        "repo_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "library_name": {"type": "string", "minLength": 1},
+        "model_type": {"type": "string", "minLength": 1},
+        "architecture": {"type": "string", "minLength": 1},
+        "config_path": {"$ref": "#/$defs/path"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_api", "tree_api", "metadata_observed_on"],
+      "properties": {
+        "model_api": {"type": "string", "format": "uri", "pattern": "^https://huggingface\\.co/api/models/"},
+        "tree_api": {"type": "string", "format": "uri", "pattern": "^https://huggingface\\.co/api/models/"},
+        "metadata_observed_on": {"type": "string", "format": "date"}
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx", "file_path"],
+      "properties": {
+        "spdx": {"type": "string", "pattern": "^[A-Za-z0-9.+-]+$"},
+        "file_path": {"$ref": "#/$defs/path"}
+      }
+    },
+    "generation_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "do_sample", "temperature", "top_p"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "do_sample": {"type": "boolean"},
+        "temperature": {"type": "number", "exclusiveMinimum": 0},
+        "top_p": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+      }
+    },
+    "chat_template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "jinja"],
+      "properties": {
+        "policy": {"const": "absent"},
+        "jinja": {"const": false}
+      }
+    },
+    "tokenizer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokenizer_path", "config_path", "tokenizer_class"],
+      "properties": {
+        "tokenizer_path": {"$ref": "#/$defs/path"},
+        "config_path": {"$ref": "#/$defs/path"},
+        "tokenizer_class": {"type": "string", "minLength": 1}
+      }
+    },
+    "weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "index_path", "shard_count", "shards"],
+      "properties": {
+        "format": {"const": "safetensors"},
+        "index_path": {"$ref": "#/$defs/path"},
+        "shard_count": {"type": "integer", "minimum": 1},
+        "shards": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/path"}
+        }
+      }
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_marker", "unexpected_files"],
+      "properties": {
+        "manifest_marker": {"const": ".model-lock.sha256"},
+        "unexpected_files": {"const": "reject"}
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_count", "selected_size_bytes", "weight_size_bytes"],
+      "properties": {
+        "file_count": {"type": "integer", "minimum": 1},
+        "selected_size_bytes": {"type": "integer", "minimum": 1},
+        "weight_size_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/file"}
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "git_blob_sha1": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size", "role"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "size": {"type": "integer", "minimum": 0},
+        "role": {
+          "enum": [
+            "config",
+            "generation_config",
+            "index",
+            "license",
+            "tokenizer",
+            "tokenizer_config",
+            "weight"
+          ]
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "git_blob_sha1": {"$ref": "#/$defs/git_blob_sha1"}
+      },
+      "oneOf": [
+        {
+          "required": ["sha256"],
+          "not": {"required": ["git_blob_sha1"]}
+        },
+        {
+          "required": ["git_blob_sha1"],
+          "not": {"required": ["sha256"]}
+        }
+      ]
+    }
+  }
+}
