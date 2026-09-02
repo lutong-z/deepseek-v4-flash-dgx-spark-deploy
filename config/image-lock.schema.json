@@ -1,17 +1,92 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/dgx-spark-deepseek-v4-deploy/image-lock.schema.json",
-  "title": "Reviewed immutable image build lock",
+  "title": "Provisional immutable image build lock",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "architecture", "base_image_ref", "source_revision", "dependency_lock_sha256", "service_contract_sha256"],
+  "required": [
+    "schema_version",
+    "status",
+    "profile_id",
+    "architecture",
+    "model_lock",
+    "source",
+    "profile",
+    "base_image_ref",
+    "dependency_lock_sha256",
+    "service_contract_sha256",
+    "profile_sha256",
+    "artifacts",
+    "provenance",
+    "patches"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
+    "status": {"enum": ["pending-artifacts", "ready-for-review"]},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$"},
     "architecture": {"const": "linux/arm64"},
-    "base_image_ref": {"type": "string", "pattern": "^[A-Za-z0-9._:/-]+@sha256:[0-9a-f]{64}$"},
-    "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "dependency_lock_sha256": {"$ref": "#/$defs/sha256"},
-    "service_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "model_lock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "revision"],
+      "properties": {
+        "path": {"const": "model.lock.json"},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vllm", "b12x"],
+      "properties": {
+        "vllm": {"$ref": "#/$defs/source"},
+        "b12x": {"$ref": "#/$defs/source"}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attention_backend",
+        "moe_backend",
+        "linear_backend",
+        "target_kv_cache_dtype",
+        "draft_kv_cache_dtype",
+        "record_bytes",
+        "compact_layout_abi",
+        "block_size",
+        "speculative_tokens",
+        "cuda_graph_mode",
+        "async_scheduling"
+      ],
+      "properties": {
+        "attention_backend": {"const": "B12X_MLA_SPARSE"},
+        "moe_backend": {"const": "b12x"},
+        "linear_backend": {"const": "b12x"},
+        "target_kv_cache_dtype": {"const": "nvfp4_ds_mla"},
+        "draft_kv_cache_dtype": {"const": "fp8"},
+        "record_bytes": {"const": 432},
+        "compact_layout_abi": {"const": "dsv4-native432-compact-v1"},
+        "block_size": {"const": 256},
+        "speculative_tokens": {"const": 5},
+        "cuda_graph_mode": {"const": "FULL_AND_PIECEWISE"},
+        "async_scheduling": {"const": false}
+      }
+    },
+    "base_image_ref": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/image_ref"}]
+    },
+    "dependency_lock_sha256": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "service_contract_sha256": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "profile_sha256": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "artifacts": {"$ref": "#/$defs/artifacts"},
+    "provenance": {"$ref": "#/$defs/provenance"},
     "patches": {
       "type": "array",
       "items": {
@@ -25,5 +100,210 @@
       }
     }
   },
-  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "pending-artifacts"}}},
+      "then": {
+        "properties": {
+          "base_image_ref": {"type": "null"},
+          "dependency_lock_sha256": {"type": "null"},
+          "service_contract_sha256": {"type": "null"},
+          "profile_sha256": {"type": "null"},
+          "artifacts": {"$ref": "#/$defs/pending_artifacts"},
+          "provenance": {"$ref": "#/$defs/pending_provenance"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "ready-for-review"}}},
+      "then": {
+        "properties": {
+          "base_image_ref": {"$ref": "#/$defs/image_ref"},
+          "dependency_lock_sha256": {"$ref": "#/$defs/sha256"},
+          "service_contract_sha256": {"$ref": "#/$defs/sha256"},
+          "profile_sha256": {"$ref": "#/$defs/sha256"},
+          "artifacts": {"$ref": "#/$defs/complete_artifacts"},
+          "provenance": {"$ref": "#/$defs/complete_provenance"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "image_ref": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}$"
+    },
+    "repo_digest": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:/-]+@sha256:[0-9a-f]{64}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "ref", "head"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?$"
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^release/[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "head": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image_ref",
+        "repo_digest",
+        "config_digest",
+        "image_id",
+        "role_image_ids",
+        "archive_sha256"
+      ],
+      "properties": {
+        "image_ref": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/image_ref"}]
+        },
+        "repo_digest": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/repo_digest"}]
+        },
+        "config_digest": {
+          "anyOf": [{"type": "null"}, {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}]
+        },
+        "image_id": {
+          "anyOf": [{"type": "null"}, {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}]
+        },
+        "role_image_ids": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["head", "worker"],
+          "properties": {
+            "head": {
+              "anyOf": [{"type": "null"}, {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}]
+            },
+            "worker": {
+              "anyOf": [{"type": "null"}, {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}]
+            }
+          }
+        },
+        "archive_sha256": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        }
+      }
+    },
+    "pending_artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image_ref",
+        "repo_digest",
+        "config_digest",
+        "image_id",
+        "role_image_ids",
+        "archive_sha256"
+      ],
+      "properties": {
+        "image_ref": {"type": "null"},
+        "repo_digest": {"type": "null"},
+        "config_digest": {"type": "null"},
+        "image_id": {"type": "null"},
+        "role_image_ids": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["head", "worker"],
+          "properties": {"head": {"type": "null"}, "worker": {"type": "null"}}
+        },
+        "archive_sha256": {"type": "null"}
+      }
+    },
+    "complete_artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image_ref",
+        "repo_digest",
+        "config_digest",
+        "image_id",
+        "role_image_ids",
+        "archive_sha256"
+      ],
+      "properties": {
+        "image_ref": {"$ref": "#/$defs/image_ref"},
+        "repo_digest": {"$ref": "#/$defs/repo_digest"},
+        "config_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "image_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "role_image_ids": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["head", "worker"],
+          "properties": {
+            "head": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "worker": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        },
+        "archive_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build_method",
+        "vllm_source_archive_sha256",
+        "b12x_source_archive_sha256",
+        "runtime_manifest_sha256"
+      ],
+      "properties": {
+        "build_method": {
+          "anyOf": [{"type": "null"}, {"type": "string", "enum": ["buildkit", "nix", "docker"]}]
+        },
+        "vllm_source_archive_sha256": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        },
+        "b12x_source_archive_sha256": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        },
+        "runtime_manifest_sha256": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        }
+      }
+    },
+    "pending_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build_method",
+        "vllm_source_archive_sha256",
+        "b12x_source_archive_sha256",
+        "runtime_manifest_sha256"
+      ],
+      "properties": {
+        "build_method": {"type": "null"},
+        "vllm_source_archive_sha256": {"type": "null"},
+        "b12x_source_archive_sha256": {"type": "null"},
+        "runtime_manifest_sha256": {"type": "null"}
+      }
+    },
+    "complete_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build_method",
+        "vllm_source_archive_sha256",
+        "b12x_source_archive_sha256",
+        "runtime_manifest_sha256"
+      ],
+      "properties": {
+        "build_method": {"type": "string", "enum": ["buildkit", "nix", "docker"]},
+        "vllm_source_archive_sha256": {"$ref": "#/$defs/sha256"},
+        "b12x_source_archive_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_manifest_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
 }

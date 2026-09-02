@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "status": "pending-artifacts",
+  "profile_id": "dsv4-native432-b12x-tp2",
+  "architecture": "linux/arm64",
+  "model_lock": {
+    "path": "model.lock.json",
+    "revision": "7872f01b1d1fe23eabc4c98b48bffcef5a386062"
+  },
+  "source": {
+    "vllm": {
+      "repository": "https://github.com/local-inference-lab/vllm.git",
+      "ref": "release/dsv4-0731-native432-b12x",
+      "head": "5817170bc0"
+    },
+    "b12x": {
+      "repository": "https://github.com/lukealonso/b12x.git",
+      "ref": "release/dsv4-0731-native432",
+      "head": "d476465"
+    }
+  },
+  "profile": {
+    "attention_backend": "B12X_MLA_SPARSE",
+    "moe_backend": "b12x",
+    "linear_backend": "b12x",
+    "target_kv_cache_dtype": "nvfp4_ds_mla",
+    "draft_kv_cache_dtype": "fp8",
+    "record_bytes": 432,
+    "compact_layout_abi": "dsv4-native432-compact-v1",
+    "block_size": 256,
+    "speculative_tokens": 5,
+    "cuda_graph_mode": "FULL_AND_PIECEWISE",
+    "async_scheduling": false
+  },
+  "base_image_ref": null,
+  "dependency_lock_sha256": null,
+  "service_contract_sha256": null,
+  "profile_sha256": null,
+  "artifacts": {
+    "image_ref": null,
+    "repo_digest": null,
+    "config_digest": null,
+    "image_id": null,
+    "role_image_ids": {
+      "head": null,
+      "worker": null
+    },
+    "archive_sha256": null
+  },
+  "provenance": {
+    "build_method": null,
+    "vllm_source_archive_sha256": null,
+    "b12x_source_archive_sha256": null,
+    "runtime_manifest_sha256": null
+  },
+  "patches": []
+}

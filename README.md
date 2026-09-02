@@ -64,15 +64,20 @@ contract.
 - DeepSeek V4 tokenizer, reasoning parser, and tool parser family names;
   chat-template wiring remains build-gated.
 
-The profile does not prove that a runtime image implements the contract. Exact
-source revisions, dependency hashes, image labels, model manifest, and service
-contract must be supplied by a separately reviewed sanitized build lock.
+The profile does not prove that a runtime image implements the contract. The
+provisional [`image.lock.json`](image.lock.json) records the public vLLM and
+B12X release coordinates and the native432 service fields, but deliberately
+leaves all build and image artifact hashes as `null` until the isolated
+runtime-image build report is reviewed. It contains no private paths, logs,
+archives, host records, or local evidence.
 
 The first scaffold intentionally leaves image-contract details release-gated:
 chat-template options, load format, linear backend, CUDA Graph capture sizing,
 compact block stride, source and dependency revisions, and image-specific
 tuning must come from the reviewed build lock. They are not inferred from
-local logs or silently supplied as operator overrides.
+local logs or silently supplied as operator overrides. A lock with
+`pending-artifacts` status is not a deployable image and must not be loaded or
+published.
 
 ## Repository map
 

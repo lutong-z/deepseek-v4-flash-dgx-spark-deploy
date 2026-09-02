@@ -62,6 +62,23 @@
     "read_only_root": true,
     "no_new_privileges": true
   },
+  "image": {
+    "lock_path": "image.lock.json",
+    "candidate_id": "dsv4-0731-native432-b12x",
+    "source_refs": {
+      "vllm": "release/dsv4-0731-native432-b12x",
+      "b12x": "release/dsv4-0731-native432"
+    },
+    "required_labels": [
+      "org.opencontainers.image.revision",
+      "com.dgx-spark.architecture",
+      "com.dgx-spark.profile_sha256",
+      "com.dgx-spark.service_contract_sha256",
+      "com.dgx-spark.image_lock_sha256",
+      "com.dgx-spark.vllm.commit",
+      "com.dgx-spark.b12x.commit"
+    ]
+  },
   "security": {
     "production_change_allowed": false,
     "api_bind_default": "127.0.0.1",

@@ -4,7 +4,7 @@
   "title": "Immutable DeepSeek V4 service profile",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "profile_id", "release_gated_manifest_fields", "platform", "topology", "model", "service", "limits", "parsing", "container", "security"],
+  "required": ["schema_version", "profile_id", "release_gated_manifest_fields", "platform", "topology", "model", "service", "limits", "parsing", "container", "image", "security"],
   "properties": {
     "schema_version": {"const": 1},
     "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$"},
@@ -107,6 +107,39 @@
         "name_prefix": {"const": "dsv4-candidate-"},
         "read_only_root": {"const": true},
         "no_new_privileges": {"const": true}
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock_path", "candidate_id", "source_refs", "required_labels"],
+      "properties": {
+        "lock_path": {"const": "image.lock.json"},
+        "candidate_id": {"const": "dsv4-0731-native432-b12x"},
+        "source_refs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vllm", "b12x"],
+          "properties": {
+            "vllm": {"const": "release/dsv4-0731-native432-b12x"},
+            "b12x": {"const": "release/dsv4-0731-native432"}
+          }
+        },
+        "required_labels": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "org.opencontainers.image.revision",
+              "com.dgx-spark.architecture",
+              "com.dgx-spark.profile_sha256",
+              "com.dgx-spark.service_contract_sha256",
+              "com.dgx-spark.image_lock_sha256",
+              "com.dgx-spark.vllm.commit",
+              "com.dgx-spark.b12x.commit"
+            ]
+          }
+        }
       }
     },
     "security": {

@@ -5,9 +5,17 @@ FROM ${BASE_IMAGE_REF}
 
 ARG SERVICE_CONTRACT_SHA256
 ARG PROFILE_SHA256
+ARG IMAGE_LOCK_SHA256
+ARG SOURCE_REVISION
+ARG VLLM_COMMIT
+ARG B12X_COMMIT
 LABEL org.opencontainers.image.title="DGX Spark DeepSeek V4 service"
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
 LABEL com.dgx-spark.architecture="linux/arm64"
 LABEL com.dgx-spark.service_contract_sha256="${SERVICE_CONTRACT_SHA256}"
 LABEL com.dgx-spark.profile_sha256="${PROFILE_SHA256}"
+LABEL com.dgx-spark.image_lock_sha256="${IMAGE_LOCK_SHA256}"
+LABEL com.dgx-spark.vllm.commit="${VLLM_COMMIT}"
+LABEL com.dgx-spark.b12x.commit="${B12X_COMMIT}"
 
 COPY service-contract.json.in /etc/dgx-spark/service-contract.json

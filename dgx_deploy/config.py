@@ -296,9 +296,12 @@ _PROFILE_KEYS: dict[tuple[str, ...], frozenset[str]] = {
             "limits",
             "parsing",
             "container",
+            "image",
             "security",
         }
     ),
+    ("image",): frozenset({"lock_path", "candidate_id", "source_refs", "required_labels"}),
+    ("image", "source_refs"): frozenset({"vllm", "b12x"}),
     ("platform",): frozenset({"architecture", "accelerator", "nodes"}),
     ("topology",): frozenset(
         {
@@ -335,6 +338,22 @@ _PROFILE_KEYS: dict[tuple[str, ...], frozenset[str]] = {
 _PROFILE_VALUES: dict[tuple[str, ...], Any] = {
     ("schema_version",): 1,
     ("profile_id",): "dsv4-native432-b12x-tp2",
+    ("image", "lock_path"): "image.lock.json",
+    ("image", "candidate_id"): "dsv4-0731-native432-b12x",
+    ("image", "source_refs", "vllm"): "release/dsv4-0731-native432-b12x",
+    ("image", "source_refs", "b12x"): "release/dsv4-0731-native432",
+    (
+        "image",
+        "required_labels",
+    ): [
+        "org.opencontainers.image.revision",
+        "com.dgx-spark.architecture",
+        "com.dgx-spark.profile_sha256",
+        "com.dgx-spark.service_contract_sha256",
+        "com.dgx-spark.image_lock_sha256",
+        "com.dgx-spark.vllm.commit",
+        "com.dgx-spark.b12x.commit",
+    ],
     (
         "release_gated_manifest_fields",
     ): [
