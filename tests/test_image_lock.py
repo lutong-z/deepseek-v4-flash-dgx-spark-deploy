@@ -35,23 +35,59 @@ class ImageLockTests(unittest.TestCase):
         profile_validator.check_schema(self.profile_schema)
         self.assertEqual(list(profile_validator.iter_errors(self.profile)), [])
 
-    def test_lock_records_public_source_heads_and_pending_artifacts(self) -> None:
+    def test_lock_records_public_source_heads_and_partial_artifacts(self) -> None:
         self.assertEqual(self.lock["status"], "pending-artifacts")
         self.assertEqual(self.lock["profile_id"], self.profile["profile_id"])
         source = self.lock["source"]
         assert isinstance(source, dict)
         self.assertEqual(source["vllm"]["ref"], "release/dsv4-0731-native432-b12x")
-        self.assertEqual(source["vllm"]["head"], "5817170bc0")
+        self.assertEqual(source["vllm"]["head"], "5817170bc04b0f203797c4a667f976bff49c12d4")
         self.assertEqual(source["b12x"]["ref"], "release/dsv4-0731-native432")
-        self.assertEqual(source["b12x"]["head"], "d476465")
+        self.assertEqual(source["b12x"]["head"], "d476465883cc7e46c128e0effa89fad1a7200cd7")
+        self.assertEqual(
+            self.lock["profile_sha256"],
+            "4ba2758db623b6fab6d1f0e7055a35c1751fff78951d6126b823ea020a673d1e",
+        )
 
         artifacts = self.lock["artifacts"]
         provenance = self.lock["provenance"]
         assert isinstance(artifacts, dict)
         assert isinstance(provenance, dict)
-        self.assertTrue(all(value is None for key, value in artifacts.items() if key != "role_image_ids"))
-        self.assertEqual(artifacts["role_image_ids"], {"head": None, "worker": None})
-        self.assertTrue(all(value is None for value in provenance.values()))
+        self.assertEqual(
+            artifacts["role_image_ids"],
+            {
+                "head": "sha256:d85fcb025139bdf5e91a71fc5d2a7a3d71f822881eaded812fb0f618a8b35f9b",
+                "worker": "sha256:94d6e10a7b35ac32fee3d5c0cff0e5239343755d5fdd3d8a32bf88159f912cae",
+            },
+        )
+        self.assertEqual(
+            artifacts["role_repo_digests"],
+            {
+                "head": None,
+                "worker": "candidate/dsv4-native432-dspark5@sha256:94d6e10a7b35ac32fee3d5c0cff0e5239343755d5fdd3d8a32bf88159f912cae",
+            },
+        )
+        self.assertIsNone(artifacts["image_ref"])
+        self.assertIsNone(artifacts["repo_digest"])
+        self.assertIsNone(artifacts["config_digest"])
+        self.assertIsNone(artifacts["image_id"])
+        self.assertIsNone(artifacts["archive_sha256"])
+        self.assertIsNone(provenance["build_method"])
+        self.assertEqual(
+            provenance["vllm_source_archive_sha256"],
+            "28c744eb38585e4e77857e33b7a52a3b9d68ba8daed25c4dae0be137bb5188fd",
+        )
+        self.assertEqual(
+            provenance["b12x_source_archive_sha256"],
+            "6d5d16e667d58070757ba5af78fb9625c2b5d46b19b25e51b9e8285a518cdca1",
+        )
+        self.assertEqual(
+            provenance["runtime_manifest_sha256"],
+            "da3de6d274de7921c8188231ca147927ea01094d79f93db484ad28a289acb673",
+        )
+        self.assertIsNone(self.lock["base_image_ref"])
+        self.assertIsNone(self.lock["dependency_lock_sha256"])
+        self.assertIsNone(self.lock["service_contract_sha256"])
         self.assertNotIn("/Users/", json.dumps(self.lock))
         self.assertNotIn("/tmp/", json.dumps(self.lock))
         self.assertNotIn("local/", json.dumps(self.lock))

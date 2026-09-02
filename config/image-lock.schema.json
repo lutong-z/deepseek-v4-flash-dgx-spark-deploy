@@ -102,19 +102,6 @@
   },
   "allOf": [
     {
-      "if": {"properties": {"status": {"const": "pending-artifacts"}}},
-      "then": {
-        "properties": {
-          "base_image_ref": {"type": "null"},
-          "dependency_lock_sha256": {"type": "null"},
-          "service_contract_sha256": {"type": "null"},
-          "profile_sha256": {"type": "null"},
-          "artifacts": {"$ref": "#/$defs/pending_artifacts"},
-          "provenance": {"$ref": "#/$defs/pending_provenance"}
-        }
-      }
-    },
-    {
       "if": {"properties": {"status": {"const": "ready-for-review"}}},
       "then": {
         "properties": {
@@ -163,6 +150,7 @@
         "config_digest",
         "image_id",
         "role_image_ids",
+        "role_repo_digests",
         "archive_sha256"
       ],
       "properties": {
@@ -191,34 +179,22 @@
             }
           }
         },
-        "archive_sha256": {
-          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
-        }
-      }
-    },
-    "pending_artifacts": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "image_ref",
-        "repo_digest",
-        "config_digest",
-        "image_id",
-        "role_image_ids",
-        "archive_sha256"
-      ],
-      "properties": {
-        "image_ref": {"type": "null"},
-        "repo_digest": {"type": "null"},
-        "config_digest": {"type": "null"},
-        "image_id": {"type": "null"},
-        "role_image_ids": {
+        "role_repo_digests": {
           "type": "object",
           "additionalProperties": false,
           "required": ["head", "worker"],
-          "properties": {"head": {"type": "null"}, "worker": {"type": "null"}}
+          "properties": {
+            "head": {
+              "anyOf": [{"type": "null"}, {"$ref": "#/$defs/repo_digest"}]
+            },
+            "worker": {
+              "anyOf": [{"type": "null"}, {"$ref": "#/$defs/repo_digest"}]
+            }
+          }
         },
-        "archive_sha256": {"type": "null"}
+        "archive_sha256": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        }
       }
     },
     "complete_artifacts": {
@@ -230,6 +206,7 @@
         "config_digest",
         "image_id",
         "role_image_ids",
+        "role_repo_digests",
         "archive_sha256"
       ],
       "properties": {
@@ -244,6 +221,15 @@
           "properties": {
             "head": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
             "worker": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        },
+        "role_repo_digests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["head", "worker"],
+          "properties": {
+            "head": {"$ref": "#/$defs/repo_digest"},
+            "worker": {"$ref": "#/$defs/repo_digest"}
           }
         },
         "archive_sha256": {"$ref": "#/$defs/sha256"}
@@ -271,22 +257,6 @@
         "runtime_manifest_sha256": {
           "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
         }
-      }
-    },
-    "pending_provenance": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "build_method",
-        "vllm_source_archive_sha256",
-        "b12x_source_archive_sha256",
-        "runtime_manifest_sha256"
-      ],
-      "properties": {
-        "build_method": {"type": "null"},
-        "vllm_source_archive_sha256": {"type": "null"},
-        "b12x_source_archive_sha256": {"type": "null"},
-        "runtime_manifest_sha256": {"type": "null"}
       }
     },
     "complete_provenance": {

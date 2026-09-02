@@ -66,9 +66,10 @@ contract.
 
 The profile does not prove that a runtime image implements the contract. The
 provisional [`image.lock.json`](image.lock.json) records the public vLLM and
-B12X release coordinates and the native432 service fields, but deliberately
-leaves all build and image artifact hashes as `null` until the isolated
-runtime-image build report is reviewed. It contains no private paths, logs,
+B12X release coordinates, supplied source/runtime hashes, and role image
+identities. It intentionally leaves unreported base, service, dependency,
+generic image, and archive values as `null`; the lock remains pending while
+behavioral validation is outstanding. It contains no private paths, logs,
 archives, host records, or local evidence.
 
 The first scaffold intentionally leaves image-contract details release-gated:

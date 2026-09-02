@@ -11,12 +11,12 @@
     "vllm": {
       "repository": "https://github.com/local-inference-lab/vllm.git",
       "ref": "release/dsv4-0731-native432-b12x",
-      "head": "5817170bc0"
+      "head": "5817170bc04b0f203797c4a667f976bff49c12d4"
     },
     "b12x": {
       "repository": "https://github.com/lukealonso/b12x.git",
       "ref": "release/dsv4-0731-native432",
-      "head": "d476465"
+      "head": "d476465883cc7e46c128e0effa89fad1a7200cd7"
     }
   },
   "profile": {
@@ -35,23 +35,27 @@
   "base_image_ref": null,
   "dependency_lock_sha256": null,
   "service_contract_sha256": null,
-  "profile_sha256": null,
+  "profile_sha256": "4ba2758db623b6fab6d1f0e7055a35c1751fff78951d6126b823ea020a673d1e",
   "artifacts": {
     "image_ref": null,
     "repo_digest": null,
     "config_digest": null,
     "image_id": null,
     "role_image_ids": {
+      "head": "sha256:d85fcb025139bdf5e91a71fc5d2a7a3d71f822881eaded812fb0f618a8b35f9b",
+      "worker": "sha256:94d6e10a7b35ac32fee3d5c0cff0e5239343755d5fdd3d8a32bf88159f912cae"
+    },
+    "role_repo_digests": {
       "head": null,
-      "worker": null
+      "worker": "candidate/dsv4-native432-dspark5@sha256:94d6e10a7b35ac32fee3d5c0cff0e5239343755d5fdd3d8a32bf88159f912cae"
     },
     "archive_sha256": null
   },
   "provenance": {
     "build_method": null,
-    "vllm_source_archive_sha256": null,
-    "b12x_source_archive_sha256": null,
-    "runtime_manifest_sha256": null
+    "vllm_source_archive_sha256": "28c744eb38585e4e77857e33b7a52a3b9d68ba8daed25c4dae0be137bb5188fd",
+    "b12x_source_archive_sha256": "6d5d16e667d58070757ba5af78fb9625c2b5d46b19b25e51b9e8285a518cdca1",
+    "runtime_manifest_sha256": "da3de6d274de7921c8188231ca147927ea01094d79f93db484ad28a289acb673"
   },
   "patches": []
 }
