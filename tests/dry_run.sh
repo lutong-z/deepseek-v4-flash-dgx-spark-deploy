@@ -41,4 +41,4 @@ if python3 -m dgx_deploy.cli plan --env-file "$env_file" --apply >/dev/null 2>&1
   printf '%s\n' 'mutation unexpectedly accepted' >&2
   exit 1
 fi
-printf '%s\n' 'dry-run scaffold passed'
+printf '%s\n' 'dry-run passed'
