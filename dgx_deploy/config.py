@@ -288,6 +288,7 @@ _PROFILE_KEYS: dict[tuple[str, ...], frozenset[str]] = {
         {
             "schema_version",
             "profile_id",
+            "release_gated_manifest_fields",
             "platform",
             "topology",
             "model",
@@ -334,6 +335,16 @@ _PROFILE_KEYS: dict[tuple[str, ...], frozenset[str]] = {
 _PROFILE_VALUES: dict[tuple[str, ...], Any] = {
     ("schema_version",): 1,
     ("profile_id",): "dsv4-native432-b12x-tp2",
+    (
+        "release_gated_manifest_fields",
+    ): [
+        "chat_template",
+        "reasoning_config",
+        "load_format",
+        "linear_backend",
+        "cuda_graph_capture_sizes",
+        "compact_block_stride",
+    ],
     ("platform", "architecture"): "linux/arm64",
     ("platform", "accelerator"): "GB10",
     ("platform", "nodes"): 2,

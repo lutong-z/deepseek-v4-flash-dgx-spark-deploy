@@ -44,11 +44,18 @@ manifest, immutable image, and external state roots.
 - maximum model length 327,680, maximum sequences 5, and batch budget 1,024;
 - asynchronous scheduling disabled and CUDA Graph mode fixed by the profile;
 - read-only model mount and external, identity-namespaced cache/state roots;
-- validated tokenizer, reasoning parser, tool parser, and chat-template contract.
+- DeepSeek V4 tokenizer, reasoning parser, and tool parser family names;
+  chat-template wiring remains build-gated.
 
 The profile does not prove that a runtime image implements the contract. Exact
 source revisions, dependency hashes, image labels, model manifest, and service
 contract must be supplied by a separately reviewed sanitized build lock.
+
+The first scaffold intentionally leaves image-contract details release-gated:
+chat-template options, load format, linear backend, CUDA Graph capture sizing,
+compact block stride, source and dependency revisions, and image-specific
+tuning must come from the reviewed build lock. They are not inferred from
+local logs or silently supplied as operator overrides.
 
 ## Repository map
 

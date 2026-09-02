@@ -1,6 +1,14 @@
 {
   "schema_version": 1,
   "profile_id": "dsv4-native432-b12x-tp2",
+  "release_gated_manifest_fields": [
+    "chat_template",
+    "reasoning_config",
+    "load_format",
+    "linear_backend",
+    "cuda_graph_capture_sizes",
+    "compact_block_stride"
+  ],
   "platform": {
     "architecture": "linux/arm64",
     "accelerator": "GB10",

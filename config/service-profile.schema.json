@@ -4,10 +4,17 @@
   "title": "Immutable DeepSeek V4 service profile",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "profile_id", "platform", "topology", "model", "service", "limits", "parsing", "container", "security"],
+  "required": ["schema_version", "profile_id", "release_gated_manifest_fields", "platform", "topology", "model", "service", "limits", "parsing", "container", "security"],
   "properties": {
     "schema_version": {"const": 1},
     "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$"},
+    "release_gated_manifest_fields": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["chat_template", "reasoning_config", "load_format", "linear_backend", "cuda_graph_capture_sizes", "compact_block_stride"]
+      }
+    },
     "platform": {
       "type": "object",
       "additionalProperties": false,
