@@ -1,19 +1,19 @@
 # Rollback contract
 
-Every future successful deployment must write an external manifest containing
-the deployment ID, config/profile/model/image identities, role labels, and the
-label-owned container IDs. It must retain the previous successful manifest.
-No secret, raw inspect output, prompt, response, or operator path belongs in
-that manifest.
+`apply` and `update` capture an external rollback state file before mutation.
+The state records the deployment ID/mode, exact previous Docker image ID,
+command vector, ownership labels, environment, and running state for both
+roles. It contains no secrets, raw logs, prompts, responses, or developer
+paths.
 
-Rollback must first render and validate the target manifest, verify strict host
-keys, and prove the old image, model, config, and network prerequisites on both
-nodes. It may then stop only the currently owned head/worker pair, start the
-old worker followed by the old head, and run health and smoke gates. A missing,
-tampered, unhealthy, or unavailable prerequisite must stop before mutation.
+`rollback` renders and validates the current mode/lock, reads the complete
+state file, proves each previous image is locally available on its node, and
+refuses incomplete or mismatched state. It stops and removes only the current
+pair carrying the exact deployment/role ownership labels, recreates the
+captured image and command, starts worker before head, and verifies exact
+image/command/labels plus service readiness.
 
-The current scaffold cannot roll back or mutate anything. Its cluster rollback
-entry point fails closed. Future failure handling must never guess a mutable
-tag, kill a process by PID, or affect an unowned same-name container. An
-interrupted rollback must leave explicit external state and support recovery
-to the just-replaced manifest.
+The command requires `--confirm` equal to the current rendered deployment ID.
+A missing, tampered, unhealthy, or unavailable prerequisite fails before
+mutation. The engine never guesses a mutable tag, kills by PID, or touches an
+unowned same-name container.

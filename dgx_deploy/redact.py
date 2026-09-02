@@ -17,8 +17,8 @@ SENSITIVE_KEYS = frozenset(
         "worker_host",
         "head_node_addr",
         "worker_node_addr",
-        "master_addr",
         "model_root",
+        "model_container_path",
         "remote_root",
         "state_root",
         "cache_root",
@@ -26,6 +26,9 @@ SENSITIVE_KEYS = frozenset(
         "result_root",
         "registry",
         "image_ref",
+        "head_image_ref",
+        "worker_image_ref",
+        "image_lock_file",
         "model_manifest_sha256",
     }
 )

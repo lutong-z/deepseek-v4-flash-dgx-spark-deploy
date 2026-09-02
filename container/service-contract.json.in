@@ -3,18 +3,46 @@
   "service": "deepseek-v4-flash",
   "profile_id": "dsv4-native432-b12x-tp2",
   "architecture": "linux/arm64",
+  "model_path": "/models/DeepSeek-V4-Flash-0731",
+  "served_model_name": "deepseek-v4-flash-0731-native432",
   "target_attention": "B12X_MLA_SPARSE",
   "target_kv_cache": "nvfp4_ds_mla",
   "target_record_bytes": 432,
+  "block_size": 256,
+  "max_model_len": 327680,
+  "max_num_seqs": 5,
+  "max_num_batched_tokens": 1024,
+  "gpu_memory_utilization": 0.85,
+  "distributed_executor_backend": "mp",
+  "enable_chunked_prefill": true,
+  "long_prefill_token_threshold": 0,
+  "reasoning": {
+    "parser": "deepseek_v4",
+    "config": {
+      "reasoning_parser": "deepseek_v4",
+      "reasoning_start_str": "",
+      "reasoning_end_str": ""
+    },
+    "thinking": true,
+    "reasoning_effort": "high"
+  },
+  "load_format": "instanttensor",
+  "linear_backend": "b12x",
   "draft": {
     "method": "dspark",
     "num_speculative_tokens": 5,
+    "draft_sample_method": "probabilistic",
     "attention_backend": "B12X_MLA_SPARSE",
     "kv_cache_dtype": "fp8"
   },
   "prefix_hash": "sha256",
   "async_scheduling": false,
-  "cuda_graph": {"enabled": true, "mode": "FULL_AND_PIECEWISE"},
+  "cuda_graph": {
+    "enabled": true,
+    "mode": "FULL_AND_PIECEWISE",
+    "max_capture_size": 64,
+    "custom_ops": ["all"]
+  },
   "source_revision": "${SOURCE_REVISION}",
   "profile_sha256": "${PROFILE_SHA256}",
   "service_contract_sha256": "${SERVICE_CONTRACT_SHA256}"

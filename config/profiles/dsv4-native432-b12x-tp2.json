@@ -24,19 +24,27 @@
   },
   "model": {
     "family": "DeepSeek-V4-Flash",
-    "served_model_name": "deepseek-v4-flash-0731",
-    "container_path": "/models"
+    "served_model_name": "deepseek-v4-flash-0731-native432",
+    "container_path": "/models",
+    "model_path": "/models/DeepSeek-V4-Flash-0731"
   },
   "service": {
     "attention_backend": "B12X_MLA_SPARSE",
     "moe_backend": "b12x",
+    "linear_backend": "b12x",
+    "distributed_executor_backend": "mp",
     "target_kv_cache_dtype": "nvfp4_ds_mla",
     "block_size": 256,
+    "gpu_memory_utilization": 0.85,
+    "enable_chunked_prefill": true,
+    "long_prefill_token_threshold": 0,
     "compact_layout": {
       "abi": "dsv4-native432-compact-v1",
       "record_bytes": 432
     },
-    "draft_config_json": "{\"method\":\"dspark\",\"num_speculative_tokens\":5,\"attention_backend\":\"B12X_MLA_SPARSE\",\"kv_cache_dtype\":\"fp8\"}",
+    "draft_config_json": "{\"method\":\"dspark\",\"num_speculative_tokens\":5,\"draft_sample_method\":\"probabilistic\",\"attention_backend\":\"B12X_MLA_SPARSE\",\"kv_cache_dtype\":\"fp8\"}",
+    "reasoning_config_json": "{\"reasoning_parser\":\"deepseek_v4\",\"reasoning_start_str\":\"\",\"reasoning_end_str\":\"\"}",
+    "load_format": "instanttensor",
     "prefix_caching": {
       "enabled": true,
       "hash_algorithm": "sha256"
@@ -45,7 +53,9 @@
     "cuda_graph": {
       "enabled": true,
       "mode": "FULL_AND_PIECEWISE"
-    }
+    },
+    "max_cudagraph_capture_size": 64,
+    "compilation_config_json": "{\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"custom_ops\":[\"all\"]}"
   },
   "limits": {
     "max_model_len": 327680,

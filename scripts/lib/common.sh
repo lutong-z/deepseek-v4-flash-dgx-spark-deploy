@@ -3,9 +3,12 @@ set -euo pipefail
 
 DGX_DEPLOY_ROOT="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-scaffold_refusal() {
+dgx_deploy() {
+  PYTHONPATH="$DGX_DEPLOY_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m dgx_deploy.cli "$@"
+}
+locked_refusal() {
   local action="$1"
-  printf 'dgx-deploy: %s is disabled in the clean scaffold; use bin/dgx-deploy plan for local dry-run rendering\n' "$action" >&2
+  printf 'dgx-deploy: %s requires a reviewed lock and is intentionally disabled\n' "$action" >&2
   return 78
 }
 

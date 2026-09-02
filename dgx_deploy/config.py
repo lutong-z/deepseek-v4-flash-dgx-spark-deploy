@@ -16,6 +16,11 @@ DEFAULT_PROFILE = ROOT / "config" / "profiles" / "dsv4-native432-b12x-tp2.json"
 # surface for service flags or shell commands.
 ALLOWED_KEYS = frozenset(
     {
+        "DEPLOYMENT_MODE",
+        "IMAGE_LOCK_FILE",
+        "HEAD_IMAGE_REF",
+        "WORKER_IMAGE_REF",
+        "MODEL_CONTAINER_PATH",
         "HEAD_HOST",
         "WORKER_HOST",
         "SSH_USER",
@@ -172,10 +177,24 @@ def _absolute_root(values: Mapping[str, str], key: str) -> str:
     _reject(not _SAFE_VALUE.fullmatch(value), f"{key} contains control characters")
     return value.rstrip("/") or "/"
 
+DEFAULT_MODEL_CONTAINER_PATH = "/models/DeepSeek-V4-Flash-0731"
+
+
+def _lock_file(values: Mapping[str, str]) -> str:
+    raw = values.get("IMAGE_LOCK_FILE", "")
+    if not raw:
+        return str(ROOT / "image.lock.json")
+    path = Path(raw)
+    _reject(not path.is_absolute(), "IMAGE_LOCK_FILE must be absolute")
+    _reject(path == Path("/") or ".." in path.parts, "IMAGE_LOCK_FILE must be an absolute traversal-free file")
+    _reject(not _SAFE_VALUE.fullmatch(raw), "IMAGE_LOCK_FILE contains control characters")
+    return str(path)
 
 def _external_file(values: Mapping[str, str], key: str) -> str:
     value = _absolute_root(values, key)
-    _reject(value.startswith(str(ROOT)), f"{key} must be outside the repository")
+    path = Path(value)
+    repo = ROOT.resolve()
+    _reject(path == repo or repo in path.parents, f"{key} must be outside the repository")
     return value
 
 
@@ -192,32 +211,47 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
     _reject(bool(unknown), f"unknown configuration keys: {sorted(unknown)}")
     missing = sorted(key for key in REQUIRED_KEYS if not values.get(key))
     _reject(bool(missing), f"missing required values: {', '.join(missing)}")
+    mode = values.get("DEPLOYMENT_MODE", "").strip().lower() or "generic"
+    _reject(mode not in {"generic", "production", "candidate"}, "DEPLOYMENT_MODE must be generic, production, or candidate")
+    if mode in {"production", "candidate"}:
+        expected_ports = (29619, 8101) if mode == "production" else (29621, 18101)
+        _reject(values.get("MASTER_ADDR") != "192.168.100.10", f"{mode} MASTER_ADDR must be 192.168.100.10")
+        _reject(values.get("HEAD_NODE_ADDR") != "192.168.100.10", f"{mode} HEAD_NODE_ADDR must be 192.168.100.10")
+        _reject(values.get("WORKER_NODE_ADDR") != "192.168.100.11", f"{mode} WORKER_NODE_ADDR must be 192.168.100.11")
+        _reject(values.get("MASTER_PORT") != str(expected_ports[0]), f"{mode} MASTER_PORT must be {expected_ports[0]}")
+        _reject(values.get("API_PORT") != str(expected_ports[1]), f"{mode} API_PORT must be {expected_ports[1]}")
+        _reject(not values.get("HEAD_IMAGE_REF") or not values.get("WORKER_IMAGE_REF"), f"{mode} requires distinct HEAD_IMAGE_REF and WORKER_IMAGE_REF")
     head_host = _address(values, "HEAD_HOST")
     worker_host = _address(values, "WORKER_HOST")
     _reject(head_host == worker_host, "HEAD_HOST and WORKER_HOST must differ")
     ssh_user = values.get("SSH_USER", "")
     head_user = values.get("HEAD_SSH_USER", "") or ssh_user
     worker_user = values.get("WORKER_SSH_USER", "") or ssh_user
-    _reject(not head_user or not worker_user, "SSH_USER or both per-node SSH users are required")
-    _reject(not _SAFE_ID.fullmatch(head_user), "head SSH user contains unsafe characters")
-    _reject(not _SAFE_ID.fullmatch(worker_user), "worker SSH user contains unsafe characters")
     _reject("SSH_KNOWN_HOSTS_FILE" not in values or not values["SSH_KNOWN_HOSTS_FILE"], "SSH_KNOWN_HOSTS_FILE is required")
     known_hosts = _external_file(values, "SSH_KNOWN_HOSTS_FILE")
     identity = values.get("SSH_IDENTITY_FILE", "")
     if identity:
         identity = _external_file(values, "SSH_IDENTITY_FILE")
-    remote_root = _absolute_root(values, "REMOTE_ROOT")
-    model_root = _absolute_root(values, "MODEL_ROOT")
-    state_root = _absolute_root(values, "STATE_ROOT")
-    cache_root = _absolute_root(values, "CACHE_ROOT")
-    result_root = _absolute_root(values, "RESULT_ROOT")
+    remote_root = _external_file(values, "REMOTE_ROOT")
+    model_root = _external_file(values, "MODEL_ROOT")
+    state_root = _external_file(values, "STATE_ROOT")
+    cache_root = _external_file(values, "CACHE_ROOT")
+    result_root = _external_file(values, "RESULT_ROOT")
     log_root = values.get("LOG_ROOT", "")
     if log_root:
-        log_root = _absolute_root(values, "LOG_ROOT")
+        log_root = _external_file(values, "LOG_ROOT")
     model_manifest = _nonempty(values, "MODEL_MANIFEST_SHA256")
     _reject(not _SHA256.fullmatch(model_manifest), "MODEL_MANIFEST_SHA256 must be 64 lowercase hex characters")
     image_ref = _nonempty(values, "IMAGE_REF")
     _reject(not _IMAGE_DIGEST.fullmatch(image_ref), "IMAGE_REF must be an immutable sha256 digest")
+    head_image_ref = values.get("HEAD_IMAGE_REF", "") or image_ref
+    worker_image_ref = values.get("WORKER_IMAGE_REF", "") or image_ref
+    _reject(not _IMAGE_DIGEST.fullmatch(head_image_ref), "HEAD_IMAGE_REF must be an immutable sha256 digest")
+    _reject(not _IMAGE_DIGEST.fullmatch(worker_image_ref), "WORKER_IMAGE_REF must be an immutable sha256 digest")
+    if mode in {"production", "candidate"}:
+        _reject(head_image_ref == worker_image_ref, f"{mode} HEAD_IMAGE_REF and WORKER_IMAGE_REF must differ")
+    model_container_path = values.get("MODEL_CONTAINER_PATH", "") or DEFAULT_MODEL_CONTAINER_PATH
+    _reject(model_container_path != DEFAULT_MODEL_CONTAINER_PATH, "MODEL_CONTAINER_PATH is fixed by the reviewed model contract")
     master_addr = _address(values, "MASTER_ADDR")
     head_node_addr = _address(values, "HEAD_NODE_ADDR")
     worker_node_addr = _address(values, "WORKER_NODE_ADDR")
@@ -228,8 +262,10 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
     forward_port = _port(values, "FORWARD_LOCAL_PORT")
     _reject(master_port == api_port, "MASTER_PORT and API_PORT must differ")
     _reject(forward_port == api_port, "FORWARD_LOCAL_PORT and API_PORT must differ")
+    if mode in {"production", "candidate"}:
+        _reject(forward_port in {master_port, api_port}, f"{mode} FORWARD_LOCAL_PORT must not overlap service ports")
     api_bind = _nonempty(values, "API_BIND_ADDR")
-    _reject(api_bind not in {"127.0.0.1", "::1"}, "API_BIND_ADDR must remain loopback in the scaffold")
+    _reject(api_bind not in {"127.0.0.1", "::1"}, "API_BIND_ADDR must remain loopback")
     head_iface = _safe_list(values, "HEAD_NET_IFACE")
     worker_iface = _safe_list(values, "WORKER_NET_IFACE")
     head_hca = _safe_list(values, "HEAD_HCA")
@@ -247,6 +283,7 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
     return {
         "profile": dict(profile),
         "deployment": {
+            "mode": mode,
             "head_host": head_host,
             "worker_host": worker_host,
             "ssh_user": ssh_user or None,
@@ -257,6 +294,7 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
             "ssh_identity_file": identity or None,
             "remote_root": remote_root,
             "model_root": model_root,
+            "model_container_path": model_container_path,
             "model_manifest_sha256": model_manifest,
             "state_root": state_root,
             "cache_root": cache_root,
@@ -264,6 +302,9 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
             "result_root": result_root,
             "registry": values.get("REGISTRY") or None,
             "image_ref": image_ref,
+            "head_image_ref": head_image_ref,
+            "worker_image_ref": worker_image_ref,
+            "image_lock_file": _lock_file(values),
             "master_addr": master_addr,
             "master_port": master_port,
             "api_port": api_port,
@@ -313,18 +354,27 @@ _PROFILE_KEYS: dict[tuple[str, ...], frozenset[str]] = {
             "worker_first",
         }
     ),
-    ("model",): frozenset({"family", "served_model_name", "container_path"}),
+    ("model",): frozenset({"family", "served_model_name", "container_path", "model_path"}),
     ("service",): frozenset(
         {
             "attention_backend",
             "moe_backend",
+            "linear_backend",
+            "distributed_executor_backend",
             "target_kv_cache_dtype",
             "block_size",
+            "gpu_memory_utilization",
+            "enable_chunked_prefill",
+            "long_prefill_token_threshold",
             "compact_layout",
             "draft_config_json",
+            "reasoning_config_json",
+            "load_format",
             "prefix_caching",
             "async_scheduling",
             "cuda_graph",
+            "max_cudagraph_capture_size",
+            "compilation_config_json",
         }
     ),
     ("service", "compact_layout"): frozenset({"abi", "record_bytes"}),
@@ -364,33 +414,34 @@ _PROFILE_VALUES: dict[tuple[str, ...], Any] = {
         "cuda_graph_capture_sizes",
         "compact_block_stride",
     ],
-    ("platform", "architecture"): "linux/arm64",
-    ("platform", "accelerator"): "GB10",
-    ("platform", "nodes"): 2,
-    ("topology", "tensor_parallel_size"): 2,
-    ("topology", "pipeline_parallel_size"): 1,
-    ("topology", "nnodes"): 2,
-    ("topology", "head_rank"): 0,
-    ("topology", "worker_rank"): 1,
-    ("topology", "worker_first"): True,
     ("model", "family"): "DeepSeek-V4-Flash",
-    ("model", "served_model_name"): "deepseek-v4-flash-0731",
+    ("model", "served_model_name"): "deepseek-v4-flash-0731-native432",
     ("model", "container_path"): "/models",
+    ("model", "model_path"): "/models/DeepSeek-V4-Flash-0731",
     ("service", "attention_backend"): "B12X_MLA_SPARSE",
     ("service", "moe_backend"): "b12x",
+    ("service", "linear_backend"): "b12x",
+    ("service", "distributed_executor_backend"): "mp",
     ("service", "target_kv_cache_dtype"): "nvfp4_ds_mla",
     ("service", "block_size"): 256,
+    ("service", "gpu_memory_utilization"): 0.85,
+    ("service", "enable_chunked_prefill"): True,
+    ("service", "long_prefill_token_threshold"): 0,
     ("service", "compact_layout", "abi"): "dsv4-native432-compact-v1",
     ("service", "compact_layout", "record_bytes"): 432,
     (
         "service",
         "draft_config_json",
-    ): '{"method":"dspark","num_speculative_tokens":5,"attention_backend":"B12X_MLA_SPARSE","kv_cache_dtype":"fp8"}',
+    ): '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic","attention_backend":"B12X_MLA_SPARSE","kv_cache_dtype":"fp8"}',
+    ("service", "reasoning_config_json"): '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"","reasoning_end_str":""}',
+    ("service", "load_format"): "instanttensor",
     ("service", "prefix_caching", "enabled"): True,
     ("service", "prefix_caching", "hash_algorithm"): "sha256",
     ("service", "async_scheduling"): False,
     ("service", "cuda_graph", "enabled"): True,
     ("service", "cuda_graph", "mode"): "FULL_AND_PIECEWISE",
+    ("service", "max_cudagraph_capture_size"): 64,
+    ("service", "compilation_config_json"): '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}',
     ("limits", "max_model_len"): 327680,
     ("limits", "max_num_seqs"): 5,
     ("limits", "max_num_batched_tokens"): 1024,

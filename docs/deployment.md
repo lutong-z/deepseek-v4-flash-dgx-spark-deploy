@@ -1,45 +1,59 @@
 # Deployment contract
 
-This repository describes a two-node ARM64 DGX Spark service with rank 1
-(worker) started before rank 0 (head). The profile fixes service invariants;
-the operator env file supplies only site values such as explicit addresses,
-external roots, and immutable image/model identities.
-
-The current scaffold supports local parsing, validation, hashing, redacted
-rendering, and dry-run planning. It does not connect to nodes or mutate a
-container, image, network, or production service. Lifecycle scripts fail
-closed until the reviewed source/build/service contract is available.
+The repository is the executable path for a two-node ARM64 DGX Spark service.
+The worker (rank 1) is started before the head (rank 0). Rendering and planning
+are local-only; lifecycle commands use strict tokenized SSH and never source an
+operator shell file.
 
 ## Configuration flow
 
 1. Copy `.env.example` to an operator-owned location outside this checkout.
-2. Fill explicit SSH and RoCE addresses, users, ports, model manifest hash,
-   external roots, and an immutable image reference.
-3. Run `bin/dgx-deploy config validate --env-file PATH`.
-4. Inspect `bin/dgx-deploy plan --env-file PATH`; it emits redacted argv vectors.
-5. Keep generated manifests and results under external state/result roots.
+2. Fill explicit SSH/RDMA values, model manifest hash, external roots, and
+   immutable per-role image references.
+3. Select `DEPLOYMENT_MODE=production` for API `8101`/master `29619`, or
+   `DEPLOYMENT_MODE=candidate` for isolated API `18101`/master `29621`.
+4. Mark a complete site-owned deployment lock `status=ready`; the committed
+   `image.lock.json` remains `pending-artifacts` and cannot be used for
+   lifecycle operations.
+5. Run `bin/dgx-deploy config validate --env-file PATH`.
+6. Run `bin/dgx-deploy render --env-file PATH --lock-file LOCK --output-dir DIR`
+   and inspect `bin/dgx-deploy plan --env-file PATH --lock-file LOCK`.
+7. Run `bin/dgx-deploy apply ... --dry-run`; only after review run
+   `bin/dgx-deploy apply ... --confirm deployment-<id>`.
 
-The renderer never sources shell. It accepts only comments, blank lines, and
-unique `KEY=VALUE` records, rejecting shell syntax, control characters,
-unknown keys, duplicates, unresolved values, path traversal, mutable image
-tags, port collisions, equal node addresses, and non-loopback API binding.
+`render`, `plan`, and every `--dry-run` path perform no SSH, Docker, SCP, or
+filesystem mutation beyond an explicitly requested render output directory.
+`start`, `stop`, `update`, `rollback`, and `apply` require the exact rendered
+deployment ID. `verify` checks image IDs, labels, command vectors, environment,
+mounts, model marker, GPU/RDMA/network preflights, and `/health` plus
+`/v1/models` readiness.
 
-## Fixed profile
+The parser accepts only comments, blank lines, and unique `KEY=VALUE` records.
+It rejects unknown keys, shell syntax, control characters, unresolved values,
+mutable image tags, path traversal, checkout-local roots, equal hosts, unsafe
+SSH values, non-loopback API binding, and candidate/production port collisions.
 
-The committed profile fixes TP2 over two GB10 nodes, B12X target attention,
-native DSV4 NVFP4 432-byte records, FP8 DSpark K5 draft state, SHA-256 prefix
-hashing, asynchronous scheduling off, CUDA Graph mode, parser/tokenizer
-choices, and service limits. Operators cannot override these values through
-the env file.
+## Reviewed service profile
 
-Exact runtime source revisions, image labels, dependency hashes, model
-manifest, and service-contract hash are separate reviewed build inputs. Do not
-reconstruct them from logs or local state.
+The profile fixes TP2 over two GB10 nodes; B12X MLA attention; native DSV4
+NVFP4 432-byte records; DSpark K5 with five speculative tokens and
+`draft_sample_method=probabilistic`; SHA-256 prefix hashing; `block_size=256`;
+maximum model length `327680`, sequences `5`, batch `1024`; asynchronous
+scheduling off; chunked prefill on; `long_prefill_token_threshold=0`; `mp`;
+GPU utilization `0.85`; `instanttensor`; b12x linear/MoE; reasoning defaults;
+and CUDA Graph capture `64` with `custom_ops=["all"]`. The reviewed model path
+is `/models/DeepSeek-V4-Flash-0731` on a read-only mount.
 
-## Mutation gate
+Exact image IDs, immutable references, source labels, model hash, and service
+contract hash come from the complete external lock. No value is inferred from
+logs or local state.
 
-Any future mutating command must render and validate the config, acquire an
-external lock, verify strict host keys, prove image/model/network preflights,
-and print a redacted plan. Mutation then requires both `--apply` and
-`--confirm DEPLOYMENT_ID`. The current CLI rejects both flags because no
-mutation implementation is present.
+## Lifecycle and recovery
+
+`apply` captures the currently-owned head/worker image, command, labels,
+environment, and running state before replacement. `update` stops/removes only
+containers carrying the matching ownership labels, stages both role contracts,
+creates both containers, and starts worker before head. Any failed gate stops
+without reporting success. `rollback` requires a complete state file, proves
+the old image is available, and restores the exact captured command/image/labels
+in worker-before-head order. Unowned containers are never touched.

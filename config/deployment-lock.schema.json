@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dgx-spark-deepseek-v4-deploy/deployment-lock.schema.json",
+  "title": "External executable deployment lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "mode", "profile_id", "model_manifest_sha256", "images"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "ready"},
+    "mode": {"enum": ["production", "candidate"]},
+    "profile_id": {"const": "dsv4-native432-b12x-tp2"},
+    "model_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head", "worker"],
+      "properties": {
+        "head": {"$ref": "#/$defs/roleImage"},
+        "worker": {"$ref": "#/$defs/roleImage"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "imageId": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "imageReference": {"type": "string", "pattern": "^(?:[A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "roleImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "image_id", "labels"],
+      "properties": {
+        "reference": {"$ref": "#/$defs/imageReference"},
+        "image_id": {"$ref": "#/$defs/imageId"},
+        "labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "org.opencontainers.image.revision",
+            "com.dgx-spark.architecture",
+            "com.dgx-spark.profile_sha256",
+            "com.dgx-spark.service_contract_sha256",
+            "com.dgx-spark.image_lock_sha256",
+            "com.dgx-spark.vllm.commit",
+            "com.dgx-spark.b12x.commit"
+          ],
+          "properties": {
+            "org.opencontainers.image.revision": {"$ref": "#/$defs/commit"},
+            "com.dgx-spark.architecture": {"const": "linux/arm64"},
+            "com.dgx-spark.profile_sha256": {"$ref": "#/$defs/sha256"},
+            "com.dgx-spark.service_contract_sha256": {"$ref": "#/$defs/sha256"},
+            "com.dgx-spark.image_lock_sha256": {"$ref": "#/$defs/sha256"},
+            "com.dgx-spark.vllm.commit": {"$ref": "#/$defs/commit"},
+            "com.dgx-spark.b12x.commit": {"$ref": "#/$defs/commit"}
+          }
+        }
+      }
+    }
+  }
+}

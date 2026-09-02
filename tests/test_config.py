@@ -101,6 +101,16 @@ class ConfigTests(unittest.TestCase):
         finally:
             path.unlink()
 
+    def test_checkout_local_roots_are_rejected(self) -> None:
+        values = valid_env()
+        values["REMOTE_ROOT"] = str(DEFAULT_PROFILE.parents[2] / "local-root")
+        path = write_env(values)
+        try:
+            with self.assertRaises(ConfigError):
+                load_config(path, DEFAULT_PROFILE)
+        finally:
+            path.unlink()
+
 
     def test_profile_path_and_invariants_are_pinned(self) -> None:
         path = write_env(valid_env())

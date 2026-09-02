@@ -1,38 +1,41 @@
-# Generic two-node DGX Spark deployment
+# Locked two-node DGX Spark deployment
 
-This is a clean, local-only scaffold for a generic two-node ARM64 DGX Spark
-service. It contains a validated service profile, strict configuration
-parsing, deterministic command rendering, redaction helpers, and fail-closed
-operation boundaries. It does not contain model data, image layers, host
-inventories, SSH configuration, evidence, or operator automation.
+This repository is an executable deployment path for the reviewed DeepSeek V4
+two-node contract. Rendering and planning are local-only and redacted by
+default. Host/container mutations require a complete external deployment lock
+and an explicit confirmation of the rendered deployment ID.
 
-No public remote is configured by this checkpoint. No command in the scaffold
-connects to a host, changes networking, pulls or pushes an image, starts or
-stops a container, or changes production state. Mutating CLI flags are rejected
-until the reviewed source/build/service contract is supplied and the lifecycle
-implementation passes its separate gates.
+The committed `image.lock.json` remains `pending-artifacts`; it is intentionally
+not deployable. A site-owned lock must be marked `ready` and contain immutable
+per-role image references, image IDs, and all required OCI labels before
+`apply`, `start`, `stop`, `update`, `rollback`, or `verify` can operate.
 
-## Safe start
+## Safe workflow
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
 python -m dgx_deploy.cli --help
-python -m dgx_deploy.cli config render --env-file /path/to/operator.env
-python -m dgx_deploy.cli plan --env-file /path/to/operator.env
+python -m dgx_deploy.cli config validate --env-file /path/to/operator.env
+python -m dgx_deploy.cli render --env-file /path/to/operator.env --lock-file /path/to/ready-lock.json --output-dir /path/to/rendered
+python -m dgx_deploy.cli plan --env-file /path/to/operator.env --lock-file /path/to/ready-lock.json
+python -m dgx_deploy.cli apply --env-file /path/to/operator.env --lock-file /path/to/ready-lock.json --dry-run
+python -m dgx_deploy.cli apply --env-file /path/to/operator.env --lock-file /path/to/ready-lock.json --confirm deployment-<id>
 ```
 
-The environment file is never sourced as shell. It accepts only comments,
-blank lines, and unique `KEY=VALUE` records. Keep the file outside this
-checkout. The renderer rejects unknown keys, duplicate keys, shell syntax,
-control characters, unresolved values, mutable image tags, path traversal,
-port collisions, and public API binding by default.
+`apply --dry-run` and `plan` never connect to a node. `apply`, `start`, `stop`,
+`update`, and `rollback` reject missing or incorrect `--confirm`; no live
+production command is run by tests. `DEPLOYMENT_MODE=production` fixes
+`192.168.100.10:8101` and master `29619`; `DEPLOYMENT_MODE=candidate` fixes
+isolated API `18101` and master `29621`. Both modes use the same explicit
+head/worker addresses but different locked images and container namespaces.
 
-Use `.env.example` as a key reference only. It contains no site hosts,
-credentials, image IDs, model files, or private addresses. Fill an operator
-copy with explicit values for the control plane, RoCE data plane, model
-manifest, immutable image, and external state roots.
+The environment file is never sourced as shell. It accepts only comments,
+blank lines, and unique `KEY=VALUE` records. Keep it and all roots, SSH keys,
+known-hosts files, lock files, model data, and state outside this checkout.
+Unknown keys, shell syntax, mutable image tags, path traversal, checkout-local
+roots, unresolved values, and mode port collisions fail closed.
 
 ## Pinned model lock
 
@@ -55,30 +58,23 @@ contract.
 
 `config/profiles/dsv4-native432-b12x-tp2.json` is an immutable contract for:
 
-- two ARM64 DGX Spark GB10 nodes, tensor parallel size 2, rank 1 first;
+- two ARM64 DGX Spark GB10 nodes, tensor parallel size 2, worker rank 1 first;
 - B12X MLA target attention with native DSV4 NVFP4 432-byte records;
-- FP8 DSpark K5 draft cache and SHA-256 prefix hashing;
-- maximum model length 327,680, maximum sequences 5, and batch budget 1,024;
-- asynchronous scheduling disabled and CUDA Graph mode fixed by the profile;
-- read-only model mount and external, identity-namespaced cache/state roots;
-- DeepSeek V4 tokenizer, reasoning parser, and tool parser family names;
-  chat-template wiring remains build-gated.
+- FP8 DSpark K5 draft cache (`draft_sample_method=probabilistic`) and SHA-256 prefix hashing;
+- maximum model length 327,680, maximum sequences 5, batch budget 1,024, and
+  `block_size=256`;
+- asynchronous scheduling disabled, chunked prefill enabled, and
+  `long_prefill_token_threshold=0`;
+- `mp` distributed execution, GPU utilization `0.85`, `instanttensor` load
+  format, b12x linear/MoE backends, reasoning defaults, and CUDA Graph capture
+  size `64` with `custom_ops=["all"]`;
+- model path `/models/DeepSeek-V4-Flash-0731` on a read-only model mount;
+- external, identity-namespaced cache/state roots and strict RDMA/GPU preflights.
 
-The profile does not prove that a runtime image implements the contract. The
-provisional [`image.lock.json`](image.lock.json) records the public vLLM and
-B12X release coordinates, supplied source/runtime hashes, and role image
-identities. It intentionally leaves unreported base, service, dependency,
-generic image, and archive values as `null`; the lock remains pending while
-behavioral validation is outstanding. It contains no private paths, logs,
-archives, host records, or local evidence.
-
-The first scaffold intentionally leaves image-contract details release-gated:
-chat-template options, load format, linear backend, CUDA Graph capture sizing,
-compact block stride, source and dependency revisions, and image-specific
-tuning must come from the reviewed build lock. They are not inferred from
-local logs or silently supplied as operator overrides. A lock with
-`pending-artifacts` status is not a deployable image and must not be loaded or
-published.
+The profile and service-contract template are reviewed inputs. A complete
+site-owned deployment lock supplies exact per-role image references, image IDs,
+and canonical OCI labels. The pending committed image lock cannot pass the
+promotion gate and is never implicitly used for mutation.
 
 ## Repository map
 
@@ -86,9 +82,8 @@ published.
 - `config/`: deployment and immutable service/image schemas and profile.
 - `container/`: build contract inputs; no image layer or credential is stored.
 - `dgx_deploy/`: parsing, validation, hashes, redaction, and argv rendering.
-- `scripts/`: lock-gated model fetch/verification plus explicitly disabled
-  deployment lifecycle entry points; no script falls back to arbitrary shell
-  commands.
+- `scripts/`: lock-gated model/image/network preflight and lifecycle entry
+  points; no script falls back to arbitrary shell commands.
 - `validation/`: synthetic redacted gate definitions only.
 - `tests/`: deterministic local contract tests and a dry-run smoke script.
 - `docs/`: deployment, image, networking, model, and rollback contracts.
