@@ -11,7 +11,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "mode", "head_host", "worker_host", "ssh_user", "head_ssh_user", "worker_ssh_user",
+        "mode", "head_host", "worker_host", "head_ssh_host", "worker_ssh_host", "ssh_user", "head_ssh_user", "worker_ssh_user",
         "ssh_port", "ssh_known_hosts_file", "ssh_identity_file", "remote_root", "model_root",
         "model_container_path", "model_manifest_sha256", "state_root", "cache_root", "log_root", "result_root",
         "registry", "image_ref", "head_image_ref", "worker_image_ref", "image_lock_file",
@@ -24,6 +24,8 @@
         "mode": {"enum": ["generic", "production", "candidate"]},
         "head_host": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
         "worker_host": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
+        "head_ssh_host": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+        "worker_ssh_host": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
         "ssh_user": {"type": ["string", "null"]},
         "head_ssh_user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},
         "worker_ssh_user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},

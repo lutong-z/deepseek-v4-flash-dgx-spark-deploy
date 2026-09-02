@@ -229,10 +229,19 @@ class DeploymentEngine:
     def _assert_owned(self, role: str, inspect: Mapping[str, Any]) -> None:
         contract = self.contracts[role]
         labels = _labels(inspect, f"{role} container")
-        _fail(labels.get("com.dgx-spark.deployment_id") != contract["deployment_id"], f"refusing to mutate unowned {role} container")
-        _fail(labels.get("com.dgx-spark.role") != role, f"refusing to mutate container with wrong role: {role}")
         actual_name = str(inspect.get("Name", "")).lstrip("/")
         _fail(actual_name != contract["container"], f"refusing to mutate unexpected {role} container")
+        current_owner = labels.get("com.dgx-spark.deployment_id") == contract["deployment_id"] and labels.get("com.dgx-spark.role") == role
+        legacy_owner = (
+            self.mode == "production"
+            and labels.get("com.dgx-spark.owner") == "deepseek-v4-flash-dgx-spark"
+            and labels.get("com.dgx-spark.role") == role
+            and str(inspect.get("Image", "")) == {
+                "head": "sha256:53c78475720e2561cf3245a9244f574e9db0fb0637c57e84a390a2c096122aa3",
+                "worker": "sha256:828171dd2c4970777993837b7d5234adf905a9ddc20503cd392a95c74b42ada8",
+            }[role]
+        )
+        _fail(not (current_owner or legacy_owner), f"refusing to mutate unowned {role} container")
 
     def preflight(self, *, require_model_marker: bool = True) -> None:
         """Check Docker/image/model/GPU/RDMA/network prerequisites on both nodes."""
@@ -331,7 +340,7 @@ class DeploymentEngine:
                 ):
                     self._scp(
                         scp_argv(
-                            str(source), str(ssh[f"{role}_host"]), str(ssh[f"{role}_ssh_user"]),
+                            str(ssh.get(f"{role}_ssh_host") or ssh[f"{role}_host"]), str(ssh[f"{role}_ssh_user"]),
                             int(ssh["ssh_port"]), str(ssh["ssh_known_hosts_file"]), destination,
                             identity_file=ssh.get("ssh_identity_file") or None,
                         )

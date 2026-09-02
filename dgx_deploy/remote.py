@@ -140,14 +140,14 @@ class SSHRunner:
     def __call__(self, role: str, command: Sequence[str]) -> CommandResult:
         if role not in {"head", "worker"}:
             raise ValueError(f"unsupported role: {role}")
-        host = str(self.deployment[f"{role}_host"])
+        host = str(self.deployment.get(f"{role}_ssh_host") or self.deployment[f"{role}_host"])
         user = str(self.deployment[f"{role}_ssh_user"])
         argv = ssh_argv(
             host,
             user,
             int(self.deployment["ssh_port"]),
             str(self.deployment["ssh_known_hosts_file"]),
-            ["sh", "-c", shlex.join(command)],
+            [shlex.join(command)],
             identity_file=self.deployment.get("ssh_identity_file") or None,
         )
         return self.runner(argv)

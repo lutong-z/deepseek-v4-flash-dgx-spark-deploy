@@ -17,6 +17,8 @@ DEFAULT_PROFILE = ROOT / "config" / "profiles" / "dsv4-native432-b12x-tp2.json"
 ALLOWED_KEYS = frozenset(
     {
         "DEPLOYMENT_MODE",
+        "HEAD_SSH_HOST",
+        "WORKER_SSH_HOST",
         "IMAGE_LOCK_FILE",
         "HEAD_IMAGE_REF",
         "WORKER_IMAGE_REF",
@@ -231,6 +233,10 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
     ssh_user = values.get("SSH_USER", "")
     head_user = values.get("HEAD_SSH_USER", "") or ssh_user
     worker_user = values.get("WORKER_SSH_USER", "") or ssh_user
+    head_ssh_host = values.get("HEAD_SSH_HOST", "") or head_host
+    worker_ssh_host = values.get("WORKER_SSH_HOST", "") or worker_host
+    _reject(not _SAFE_HOST.fullmatch(head_ssh_host) or "@" in head_ssh_host or "/" in head_ssh_host, "HEAD_SSH_HOST contains unsafe characters")
+    _reject(not _SAFE_HOST.fullmatch(worker_ssh_host) or "@" in worker_ssh_host or "/" in worker_ssh_host, "WORKER_SSH_HOST contains unsafe characters")
     _reject("SSH_KNOWN_HOSTS_FILE" not in values or not values["SSH_KNOWN_HOSTS_FILE"], "SSH_KNOWN_HOSTS_FILE is required")
     known_hosts = _external_file(values, "SSH_KNOWN_HOSTS_FILE")
     identity = values.get("SSH_IDENTITY_FILE", "")
@@ -295,6 +301,8 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
             "mode": mode,
             "head_host": head_host,
             "worker_host": worker_host,
+            "head_ssh_host": head_ssh_host,
+            "worker_ssh_host": worker_ssh_host,
             "ssh_user": ssh_user or None,
             "head_ssh_user": head_user,
             "worker_ssh_user": worker_user,
