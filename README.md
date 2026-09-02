@@ -30,6 +30,9 @@ production command is run by tests. `DEPLOYMENT_MODE=production` fixes
 `192.168.100.10:8101` and master `29619`; `DEPLOYMENT_MODE=candidate` fixes
 isolated API `18101` and master `29621`. Both modes use the same explicit
 head/worker addresses but different locked images and container namespaces.
+Production access matches the validated service bind (`0.0.0.0:8101`) only
+when the operator explicitly sets `ALLOW_PUBLIC_API=1`; candidate mode and
+all other configurations remain loopback-only.
 
 The environment file is never sourced as shell. It accepts only comments,
 blank lines, and unique `KEY=VALUE` records. Keep it and all roots, SSH keys,

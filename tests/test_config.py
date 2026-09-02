@@ -100,6 +100,34 @@ class ConfigTests(unittest.TestCase):
                 load_config(path, DEFAULT_PROFILE)
         finally:
             path.unlink()
+    def test_public_production_bind_requires_explicit_gate(self) -> None:
+        values = valid_env()
+        values.update(
+            {
+                "DEPLOYMENT_MODE": "production",
+                "MASTER_ADDR": "192.168.100.10",
+                "MASTER_PORT": "29619",
+                "API_PORT": "8101",
+                "HEAD_NODE_ADDR": "192.168.100.10",
+                "WORKER_NODE_ADDR": "192.168.100.11",
+                "HEAD_IMAGE_REF": "registry.example.invalid/head@sha256:" + "c" * 64,
+                "WORKER_IMAGE_REF": "registry.example.invalid/worker@sha256:" + "d" * 64,
+                "API_BIND_ADDR": "0.0.0.0",
+            }
+        )
+        path = write_env(values)
+        try:
+            with self.assertRaises(ConfigError):
+                load_config(path, DEFAULT_PROFILE)
+            values["ALLOW_PUBLIC_API"] = "1"
+            path.unlink()
+            path = write_env(values)
+            config = load_config(path, DEFAULT_PROFILE)
+            self.assertEqual(config["deployment"]["api_bind_addr"], "0.0.0.0")
+            self.assertTrue(config["deployment"]["allow_public_api"])
+        finally:
+            path.unlink()
+
 
     def test_checkout_local_roots_are_rejected(self) -> None:
         values = valid_env()

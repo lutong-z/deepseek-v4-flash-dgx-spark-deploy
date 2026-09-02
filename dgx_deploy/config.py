@@ -52,6 +52,7 @@ ALLOWED_KEYS = frozenset(
         "ROCE_GID_INDEX",
         "ROCE_MTU",
         "API_BIND_ADDR",
+        "ALLOW_PUBLIC_API",
         "FORWARD_LOCAL_PORT",
         "BASE_IMAGE_REF",
         "BUILD_CONTEXT",
@@ -268,7 +269,12 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
     if mode in {"production", "candidate"}:
         _reject(forward_port in {master_port, api_port}, f"{mode} FORWARD_LOCAL_PORT must not overlap service ports")
     api_bind = _nonempty(values, "API_BIND_ADDR")
-    _reject(api_bind not in {"127.0.0.1", "::1"}, "API_BIND_ADDR must remain loopback")
+    allow_public_api = values.get("ALLOW_PUBLIC_API", "") or "0"
+    _reject(allow_public_api not in {"0", "1"}, "ALLOW_PUBLIC_API must be 0 or 1")
+    if mode == "production" and api_bind == "0.0.0.0":
+        _reject(allow_public_api != "1", "production 0.0.0.0 binding requires ALLOW_PUBLIC_API=1")
+    else:
+        _reject(api_bind not in {"127.0.0.1", "::1"}, "API_BIND_ADDR must remain loopback unless the reviewed production public-bind gate is enabled")
     head_iface = _safe_list(values, "HEAD_NET_IFACE")
     worker_iface = _safe_list(values, "WORKER_NET_IFACE")
     head_hca = _safe_list(values, "HEAD_HCA")
@@ -322,6 +328,7 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
             "roce_gid_index": int(gid) if gid else None,
             "roce_mtu": int(mtu),
             "api_bind_addr": api_bind,
+            "allow_public_api": allow_public_api == "1",
             "forward_local_port": forward_port,
         },
     }

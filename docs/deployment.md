@@ -31,7 +31,9 @@ mounts, model marker, GPU/RDMA/network preflights, and `/health` plus
 The parser accepts only comments, blank lines, and unique `KEY=VALUE` records.
 It rejects unknown keys, shell syntax, control characters, unresolved values,
 mutable image tags, path traversal, checkout-local roots, equal hosts, unsafe
-SSH values, non-loopback API binding, and candidate/production port collisions.
+SSH values, candidate/production port collisions, and public API binding unless
+production explicitly sets `ALLOW_PUBLIC_API=1`. Candidate mode always uses a
+loopback API bind.
 
 ## Reviewed service profile
 

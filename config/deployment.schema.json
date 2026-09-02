@@ -18,7 +18,7 @@
         "master_addr", "master_port", "api_port", "head_node_addr",
         "worker_node_addr", "head_net_iface", "worker_net_iface", "head_hca", "worker_hca",
         "head_cuda_visible_devices", "worker_cuda_visible_devices", "roce_gid_index", "roce_mtu",
-        "api_bind_addr", "forward_local_port"
+        "api_bind_addr", "allow_public_api", "forward_local_port"
       ],
       "properties": {
         "mode": {"enum": ["generic", "production", "candidate"]},
@@ -56,7 +56,8 @@
         "worker_cuda_visible_devices": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*$"},
         "roce_gid_index": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
         "roce_mtu": {"type": "integer", "minimum": 576, "maximum": 65535},
-        "api_bind_addr": {"enum": ["127.0.0.1", "::1"]},
+        "api_bind_addr": {"enum": ["127.0.0.1", "::1", "0.0.0.0"]},
+        "allow_public_api": {"type": "boolean"},
         "forward_local_port": {"type": "integer", "minimum": 1, "maximum": 65535}
       }
     }
