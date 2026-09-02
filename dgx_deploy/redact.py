@@ -32,11 +32,11 @@ SENSITIVE_KEYS = frozenset(
 _SECRET_TEXT = re.compile(
     r"(?i)(?:bearer\s+|(?:api[_-]?key|access[_-]?token|password)\s*[=:]\s*)[^\s,]+"
 )
-_IP_TEXT = re.compile(r"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])|::1")
-_PATH_TEXT = re.compile(
-    r"(?<![A-Za-z0-9])/(?:Users|home|srv|var|etc|tmp|models|opt|root|run)"
-    r"[^,\s]*"
+_IP_TEXT = re.compile(
+    r"(?<![A-Za-z0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![A-Za-z0-9])"
+    r"|(?<![A-Za-z0-9])(?:\[[0-9A-Fa-f:.]+\]|(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4})(?![A-Za-z0-9])"
 )
+_PATH_TEXT = re.compile(r"(?<![A-Za-z0-9:/])/(?:[^,\s\"']+)")
 
 
 def _redact_string(value: str) -> str:

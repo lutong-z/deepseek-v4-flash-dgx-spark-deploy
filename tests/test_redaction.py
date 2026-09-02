@@ -24,5 +24,20 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("t" * 20, redact_text("access_token=" + "t" * 20))
         self.assertNotIn("s" * 20, redact_text("Bearer " + "s" * 20))
 
+    def test_argv_strings_hide_ipv6_and_unlisted_paths(self) -> None:
+        value = redact_mapping(
+            {
+                "argv": [
+                    "--master-addr",
+                    "2001:db8::10",
+                    "type=bind,src=/mnt/operator-private/model,dst=/models",
+                ],
+                "environment": ["VLLM_HOST_IP=2001:db8::10"],
+            }
+        )
+        rendered = repr(value)
+        self.assertNotIn("2001:db8::10", rendered)
+        self.assertNotIn("/mnt/operator-private/model", rendered)
+
 if __name__ == "__main__":
     unittest.main()
