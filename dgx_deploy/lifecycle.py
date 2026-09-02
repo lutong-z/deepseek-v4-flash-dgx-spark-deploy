@@ -283,6 +283,8 @@ class DeploymentEngine:
             self._assert_owned(role, inspect)
             state = inspect.get("State")
             docker_config = inspect.get("Config")
+            host_config = inspect.get("HostConfig")
+            host_state = host_config if isinstance(host_config, Mapping) else {}
             roles[role] = {
                 "name": str(inspect.get("Name", "")).lstrip("/"),
                 "image": str(inspect.get("Image", "")),
@@ -292,6 +294,16 @@ class DeploymentEngine:
                 "environment": list(docker_config.get("Env", [])) if isinstance(docker_config, Mapping) and isinstance(docker_config.get("Env"), list) else [],
                 "mounts": list(inspect.get("Mounts", [])) if isinstance(inspect.get("Mounts"), list) else [],
                 "working_dir": str(docker_config.get("WorkingDir", "")) if isinstance(docker_config, Mapping) else "",
+                "host_config": {
+                    "network_mode": str(host_state.get("NetworkMode", "")),
+                    "ipc_mode": str(host_state.get("IpcMode", "")),
+                    "privileged": bool(host_state.get("Privileged", False)),
+                    "shm_size": int(host_state.get("ShmSize", 0) or 0),
+                    "security_opt": list(host_state.get("SecurityOpt", [])) if isinstance(host_state.get("SecurityOpt"), list) else [],
+                    "device_requests": list(host_state.get("DeviceRequests", [])) if isinstance(host_state.get("DeviceRequests"), list) else [],
+                    "ulimits": list(host_state.get("Ulimits", [])) if isinstance(host_state.get("Ulimits"), list) else [],
+                    "readonly_rootfs": bool(host_state.get("ReadonlyRootfs", False)),
+                },
                 "running": bool(state.get("Running")) if isinstance(state, Mapping) else False,
             }
         state = {
@@ -340,7 +352,7 @@ class DeploymentEngine:
                 ):
                     self._scp(
                         scp_argv(
-                            str(ssh.get(f"{role}_ssh_host") or ssh[f"{role}_host"]), str(ssh[f"{role}_ssh_user"]),
+                            str(source), str(ssh.get(f"{role}_ssh_host") or ssh[f"{role}_host"]), str(ssh[f"{role}_ssh_user"]),
                             int(ssh["ssh_port"]), str(ssh["ssh_known_hosts_file"]), destination,
                             identity_file=ssh.get("ssh_identity_file") or None,
                         )
@@ -350,7 +362,9 @@ class DeploymentEngine:
             inspect = self._inspect(role, allow_missing=True)
             if inspect is not None:
                 self._assert_owned(role, inspect)
-                self._remote(role, ["docker", "container", "stop", "--time", "30", str(self.contracts[role]["container"])])
+                state = inspect.get("State")
+                if isinstance(state, Mapping) and bool(state.get("Running")):
+                    self._remote(role, ["docker", "container", "stop", "--time", "30", str(self.contracts[role]["container"])])
 
     def _remove_owned(self) -> None:
         for role in _role_order():
@@ -408,11 +422,6 @@ class DeploymentEngine:
                 self.rollback(state_file)
             raise
 
-    def start(self) -> None:
-        self.preflight()
-        self._start()
-        self.verify(preflight=False)
-
     def stop(self) -> None:
         self._stop_owned()
 
@@ -449,7 +458,7 @@ class DeploymentEngine:
         for role in _role_order():
             old = roles.get(role)
             _fail(not isinstance(old, Mapping), f"rollback state has no previous {role} contract")
-            for key in ("name", "image", "command", "labels", "environment", "mounts", "working_dir", "running"):
+            for key in ("name", "image", "command", "labels", "environment", "mounts", "working_dir", "host_config", "running"):
                 _fail(key not in old, f"rollback state {role} is missing {key}")
         # Check that the exact previous image is available before touching the
         # currently-owned pair.  The old command vector and labels remain
@@ -462,10 +471,35 @@ class DeploymentEngine:
         for role in _role_order():
             old = roles[role]
             create = ["docker", "container", "create", "--name", str(old["name"])]
-            labels = old["labels"]
-            _fail(not isinstance(labels, Mapping), f"rollback {role} labels are malformed")
-            for key, value in sorted(labels.items()):
-                create.extend(["--label", f"{key}={value}"])
+            host_config = old["host_config"]
+            _fail(not isinstance(host_config, Mapping), f"rollback {role} host configuration is malformed")
+            network_mode = str(host_config.get("network_mode", ""))
+            if network_mode:
+                create.extend(["--network", network_mode])
+            ipc_mode = str(host_config.get("ipc_mode", ""))
+            if ipc_mode:
+                create.extend(["--ipc", ipc_mode])
+            if bool(host_config.get("privileged")):
+                create.append("--privileged")
+            shm_size = int(host_config.get("shm_size", 0) or 0)
+            if shm_size:
+                create.extend(["--shm-size", str(shm_size)])
+            for option in host_config.get("security_opt", []):
+                _fail(not isinstance(option, str) or not option, f"rollback {role} security option is malformed")
+                create.extend(["--security-opt", option])
+            for request in host_config.get("device_requests", []):
+                if isinstance(request, Mapping) and int(request.get("Count", 0) or 0) == -1:
+                    create.extend(["--gpus", "all"])
+                    break
+            for limit in host_config.get("ulimits", []):
+                _fail(not isinstance(limit, Mapping), f"rollback {role} ulimit is malformed")
+                lname = limit.get("Name")
+                hard = limit.get("Hard")
+                soft = limit.get("Soft", hard)
+                _fail(not isinstance(lname, str) or not lname or hard is None or soft is None, f"rollback {role} ulimit is incomplete")
+                create.extend(["--ulimit", f"{lname}={soft}:{hard}"])
+            if bool(host_config.get("readonly_rootfs")):
+                create.append("--read-only")
             environment = old["environment"]
             _fail(not isinstance(environment, list), f"rollback {role} environment is malformed")
             for value in environment:
