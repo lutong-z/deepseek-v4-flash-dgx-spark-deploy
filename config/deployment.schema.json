@@ -11,9 +11,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "mode", "head_host", "worker_host", "head_ssh_host", "worker_ssh_host", "ssh_user", "head_ssh_user", "worker_ssh_user",
+        "mode", "fabric_profile", "head_fabric_cidr", "worker_fabric_cidr", "head_fabric_peer", "worker_fabric_peer",
+        "head_fabric_connection", "worker_fabric_connection", "head_roce_gid_index", "worker_roce_gid_index",
+        "head_host", "worker_host", "head_ssh_host", "worker_ssh_host", "ssh_user", "head_ssh_user", "worker_ssh_user",
         "ssh_port", "ssh_known_hosts_file", "ssh_identity_file", "remote_root", "model_root",
-        "model_container_path", "model_manifest_sha256", "state_root", "cache_root", "log_root", "result_root",
         "registry", "image_ref", "head_image_ref", "worker_image_ref", "image_lock_file",
         "master_addr", "master_port", "api_port", "head_node_addr",
         "worker_node_addr", "head_net_iface", "worker_net_iface", "head_hca", "worker_hca",
@@ -22,6 +23,15 @@
       ],
       "properties": {
         "mode": {"enum": ["generic", "production", "candidate"]},
+        "fabric_profile": {"enum": ["f0", "f1", "auto"]},
+        "head_fabric_cidr": {"type": ["string", "null"], "pattern": "^[0-9.]+/[0-9]{1,2}$"},
+        "worker_fabric_cidr": {"type": ["string", "null"], "pattern": "^[0-9.]+/[0-9]{1,2}$"},
+        "head_fabric_peer": {"type": ["string", "null"], "pattern": "^[A-Fa-f0-9:.]+$"},
+        "worker_fabric_peer": {"type": ["string", "null"], "pattern": "^[A-Fa-f0-9:.]+$"},
+        "head_fabric_connection": {"type": ["string", "null"], "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},
+        "worker_fabric_connection": {"type": ["string", "null"], "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},
+        "head_roce_gid_index": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
+        "worker_roce_gid_index": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
         "head_host": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
         "worker_host": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
         "head_ssh_host": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
@@ -61,7 +71,32 @@
         "api_bind_addr": {"enum": ["127.0.0.1", "::1", "0.0.0.0"]},
         "allow_public_api": {"type": "boolean"},
         "forward_local_port": {"type": "integer", "minimum": 1, "maximum": 65535}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"fabric_profile": {"const": "f1"}}
+          },
+          "then": {
+            "required": [
+              "head_fabric_cidr", "worker_fabric_cidr", "head_fabric_peer", "worker_fabric_peer",
+              "head_fabric_connection", "worker_fabric_connection", "head_net_iface", "worker_net_iface",
+              "head_hca", "worker_hca"
+            ],
+            "properties": {
+              "head_fabric_cidr": {"const": "192.168.100.10/24"},
+              "worker_fabric_cidr": {"const": "192.168.100.11/24"},
+              "head_fabric_peer": {"const": "192.168.100.11"},
+              "worker_fabric_peer": {"const": "192.168.100.10"},
+              "head_net_iface": {"const": "enp1s0f1np1"},
+              "worker_net_iface": {"const": "enp1s0f1np1"},
+              "head_hca": {"const": "rocep1s0f1"},
+              "worker_hca": {"const": "rocep1s0f1"},
+              "roce_mtu": {"const": 9000}
+            }
+          }
+        }
+      ]
     }
   },
   "$defs": {

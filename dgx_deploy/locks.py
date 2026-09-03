@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from .config import ConfigError
+from .config import ConfigError, canonical_json
 
 REQUIRED_IMAGE_LABELS = (
     "org.opencontainers.image.revision",
@@ -58,6 +58,10 @@ def _read_lock(path: Path) -> tuple[dict[str, Any], str]:
         raise LockError(f"cannot read deployment lock: {path}") from exc
     _expect(isinstance(value, dict), "deployment lock must be a JSON object")
     return value, hashlib.sha256(raw).hexdigest()
+def _content_sha256(value: Mapping[str, Any]) -> str:
+    payload = dict(value)
+    payload.pop("lock_sha256", None)
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 def _validate_labels(labels: Mapping[str, Any], role: str) -> dict[str, str]:
@@ -83,16 +87,17 @@ def _validate_labels(labels: Mapping[str, Any], role: str) -> dict[str, str]:
         _expect(_GIT_COMMIT.fullmatch(normalized[key]) is not None, f"images.{role}.labels.{key} must be a full git commit")
     return normalized
 
-
 def load_deployment_lock(path: Path, config: Mapping[str, Any]) -> dict[str, Any]:
     """Load a complete per-role image lock and bind it to canonical config."""
 
-    value, lock_sha256 = _read_lock(path)
+    value, raw_sha256 = _read_lock(path)
     _exact_keys(
         value,
-        {"schema_version", "status", "mode", "profile_id", "model_manifest_sha256", "images"},
+        {"schema_version", "status", "mode", "profile_id", "model_manifest_sha256", "images", "lock_sha256"},
         "deployment lock",
     )
+    _expect(isinstance(value["lock_sha256"], str) and _SHA256.fullmatch(value["lock_sha256"]) is not None, "deployment lock lock_sha256 must be lowercase sha256")
+    _expect(value["lock_sha256"] == _content_sha256(value), "deployment lock lock_sha256 does not match canonical lock content")
     _expect(value["schema_version"] == 1, "deployment lock schema_version must be 1")
     _expect(value["status"] == "ready", "deployment lock status must be ready")
 
@@ -106,7 +111,6 @@ def load_deployment_lock(path: Path, config: Mapping[str, Any]) -> dict[str, Any
     _expect(model_sha256 == deployment.get("model_manifest_sha256"), "deployment lock model manifest does not match operator configuration")
 
     images = _mapping(value.get("images"), "images")
-    _exact_keys(images, {"head", "worker"}, "images")
     normalized_images: dict[str, Any] = {}
     for role in ("head", "worker"):
         image = _mapping(images.get(role), f"images.{role}")
@@ -115,18 +119,21 @@ def load_deployment_lock(path: Path, config: Mapping[str, Any]) -> dict[str, Any
         image_id = image.get("image_id")
         _expect(isinstance(reference, str) and _IMAGE_REF.fullmatch(reference) is not None, f"images.{role}.reference must be immutable")
         _expect(isinstance(image_id, str) and _IMAGE_ID.fullmatch(image_id) is not None, f"images.{role}.image_id must be an exact image ID")
+        _expect(reference == deployment.get(f"{role}_image_ref"), f"deployment {role} image reference does not match lock")
         is_candidate = _CANDIDATE_REF.search(reference) is not None
         if mode == "candidate":
             _expect(is_candidate, f"candidate images.{role}.reference must be candidate-namespaced")
         else:
             _expect(not is_candidate, f"production images.{role}.reference must not be candidate-namespaced")
+        normalized_labels = _validate_labels(_mapping(image.get("labels"), f"images.{role}.labels"), role)
         normalized_images[role] = {
             "reference": reference,
             "image_id": image_id,
-            "labels": _validate_labels(_mapping(image.get("labels"), f"images.{role}.labels"), role),
+            "labels": normalized_labels,
         }
 
     normalized = dict(value)
     normalized["images"] = normalized_images
-    normalized["lock_sha256"] = lock_sha256
+    normalized["lock_sha256"] = str(value["lock_sha256"])
+    normalized["raw_sha256"] = raw_sha256
     return normalized

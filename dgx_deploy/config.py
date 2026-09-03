@@ -17,6 +17,15 @@ DEFAULT_PROFILE = ROOT / "config" / "profiles" / "dsv4-native432-b12x-tp2.json"
 ALLOWED_KEYS = frozenset(
     {
         "DEPLOYMENT_MODE",
+        "FABRIC_PROFILE",
+        "HEAD_FABRIC_CIDR",
+        "WORKER_FABRIC_CIDR",
+        "HEAD_FABRIC_PEER",
+        "WORKER_FABRIC_PEER",
+        "HEAD_FABRIC_CONNECTION",
+        "WORKER_FABRIC_CONNECTION",
+        "HEAD_ROCE_GID_INDEX",
+        "WORKER_ROCE_GID_INDEX",
         "HEAD_SSH_HOST",
         "WORKER_SSH_HOST",
         "IMAGE_LOCK_FILE",
@@ -83,18 +92,6 @@ REQUIRED_KEYS = frozenset(
         "RESULT_ROOT",
         "IMAGE_REF",
         "MASTER_ADDR",
-        "MASTER_PORT",
-        "API_PORT",
-        "HEAD_NODE_ADDR",
-        "WORKER_NODE_ADDR",
-        "HEAD_NET_IFACE",
-        "WORKER_NET_IFACE",
-        "HEAD_HCA",
-        "WORKER_HCA",
-        "HEAD_CUDA_VISIBLE_DEVICES",
-        "WORKER_CUDA_VISIBLE_DEVICES",
-        "ROCE_MTU",
-        "API_BIND_ADDR",
         "FORWARD_LOCAL_PORT",
     }
 )
@@ -208,17 +205,51 @@ def _safe_list(values: Mapping[str, str], key: str) -> str:
     value = _nonempty(values, key)
     _reject(not _SAFE_LIST.fullmatch(value), f"{key} contains unsafe characters")
     return value
+def _cidr(values: Mapping[str, str], key: str, expected_ip: str) -> str:
+    raw = _nonempty(values, key)
+    try:
+        interface = ipaddress.ip_interface(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{key} must be an IP address with prefix") from exc
+    _reject(str(interface.ip) != expected_ip, f"{key} must address {expected_ip}")
+    _reject(interface.network.prefixlen != 24, f"{key} must use the reviewed /24 prefix")
+    return raw
 
 
 def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str, Any]:
     """Validate deployment values and return a canonical structured object."""
-
     unknown = set(values) - ALLOWED_KEYS
     _reject(bool(unknown), f"unknown configuration keys: {sorted(unknown)}")
     missing = sorted(key for key in REQUIRED_KEYS if not values.get(key))
     _reject(bool(missing), f"missing required values: {', '.join(missing)}")
     mode = values.get("DEPLOYMENT_MODE", "").strip().lower() or "generic"
     _reject(mode not in {"generic", "production", "candidate"}, "DEPLOYMENT_MODE must be generic, production, or candidate")
+    fabric_profile = values.get("FABRIC_PROFILE", "").strip().lower() or "auto"
+    _reject(fabric_profile not in {"f0", "f1", "auto"}, "FABRIC_PROFILE must be f0, f1, or auto")
+    head_fabric_cidr = values.get("HEAD_FABRIC_CIDR", "")
+    worker_fabric_cidr = values.get("WORKER_FABRIC_CIDR", "")
+    head_fabric_peer = values.get("HEAD_FABRIC_PEER", "")
+    worker_fabric_peer = values.get("WORKER_FABRIC_PEER", "")
+    head_fabric_connection = values.get("HEAD_FABRIC_CONNECTION", "")
+    worker_fabric_connection = values.get("WORKER_FABRIC_CONNECTION", "")
+    head_roce_gid = values.get("HEAD_ROCE_GID_INDEX", "")
+    worker_roce_gid = values.get("WORKER_ROCE_GID_INDEX", "")
+    if fabric_profile == "f1":
+        _reject(mode not in {"production", "candidate"}, "f1 requires production or candidate mode")
+        _reject(values.get("HEAD_NET_IFACE") != "enp1s0f1np1" or values.get("WORKER_NET_IFACE") != "enp1s0f1np1", "f1 requires enp1s0f1np1 on both roles")
+        _reject(values.get("HEAD_HCA") != "rocep1s0f1" or values.get("WORKER_HCA") != "rocep1s0f1", "f1 requires rocep1s0f1 on both roles")
+        head_fabric_cidr = _cidr(values, "HEAD_FABRIC_CIDR", "192.168.100.10")
+        worker_fabric_cidr = _cidr(values, "WORKER_FABRIC_CIDR", "192.168.100.11")
+        _reject(head_fabric_peer != "192.168.100.11", "HEAD_FABRIC_PEER must be 192.168.100.11")
+        _reject(worker_fabric_peer != "192.168.100.10", "WORKER_FABRIC_PEER must be 192.168.100.10")
+        for key, connection in (("HEAD_FABRIC_CONNECTION", head_fabric_connection), ("WORKER_FABRIC_CONNECTION", worker_fabric_connection)):
+            _reject(not _SAFE_ID.fullmatch(connection), f"{key} contains unsafe characters")
+        for key, raw_gid in (("HEAD_ROCE_GID_INDEX", head_roce_gid), ("WORKER_ROCE_GID_INDEX", worker_roce_gid)):
+            if raw_gid:
+                _reject(not raw_gid.isdecimal() or not 0 <= int(raw_gid) <= 255, f"{key} must be between 0 and 255")
+    elif fabric_profile == "auto":
+        _reject(bool(head_fabric_cidr or worker_fabric_cidr or head_fabric_peer or worker_fabric_peer), "auto fabric profile cannot carry static f1 fields")
+        _reject(bool(head_roce_gid or worker_roce_gid), "auto fabric profile must discover GID indexes")
     if mode in {"production", "candidate"}:
         expected_ports = (29619, 8101) if mode == "production" else (29621, 18101)
         _reject(values.get("MASTER_ADDR") != "192.168.100.10", f"{mode} MASTER_ADDR must be 192.168.100.10")
@@ -251,6 +282,12 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
     if log_root:
         log_root = _external_file(values, "LOG_ROOT")
     model_manifest = _nonempty(values, "MODEL_MANIFEST_SHA256")
+    roots = (remote_root, cache_root, state_root, result_root, log_root)
+    if mode in {"production", "candidate"}:
+        _reject(not log_root, f"{mode} requires LOG_ROOT")
+        _reject(len(set(roots)) != len(roots), f"{mode} remote/cache/state/result/log roots must be distinct")
+    if mode == "candidate":
+        _reject(not all("candidate" in root.lower() for root in roots), "candidate roots must be candidate-namespaced")
     _reject(not _SHA256.fullmatch(model_manifest), "MODEL_MANIFEST_SHA256 must be 64 lowercase hex characters")
     image_ref = _nonempty(values, "IMAGE_REF")
     _reject(not _IMAGE_DIGEST.fullmatch(image_ref), "IMAGE_REF must be an immutable sha256 digest")
@@ -299,6 +336,15 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
         "profile": dict(profile),
         "deployment": {
             "mode": mode,
+            "fabric_profile": fabric_profile,
+            "head_fabric_cidr": head_fabric_cidr or None,
+            "worker_fabric_cidr": worker_fabric_cidr or None,
+            "head_fabric_peer": head_fabric_peer or None,
+            "worker_fabric_peer": worker_fabric_peer or None,
+            "head_fabric_connection": head_fabric_connection or None,
+            "worker_fabric_connection": worker_fabric_connection or None,
+            "head_roce_gid_index": int(head_roce_gid) if head_roce_gid else (int(gid) if gid else None),
+            "worker_roce_gid_index": int(worker_roce_gid) if worker_roce_gid else (int(gid) if gid else None),
             "head_host": head_host,
             "worker_host": worker_host,
             "head_ssh_host": head_ssh_host,

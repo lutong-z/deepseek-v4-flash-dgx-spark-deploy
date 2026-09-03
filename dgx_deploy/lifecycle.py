@@ -8,15 +8,30 @@ sourced and no shell fragment is accepted from configuration.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from .config import ConfigError, canonical_json, config_sha256
+from .fabric import (
+    FabricError,
+    apply_commands,
+    discovery_commands,
+    fabric_spec,
+    gid_attribute_commands,
+    gid_discovery_command,
+    parse_address_output,
+    parse_gid_attributes,
+    parse_gid_discovery_output,
+    parse_gid_output,
+    parse_link_output,
+    verify_rdma_output,
+)
 from .contract import contract_json
 from .locks import REQUIRED_IMAGE_LABELS, load_deployment_lock
 from .manifest import deployment_id
@@ -49,6 +64,10 @@ class OperationRecord:
 def _fail(condition: bool, message: str) -> None:
     if condition:
         raise LifecycleError(message)
+def _state_digest(state: Mapping[str, Any]) -> str:
+    payload = dict(state)
+    payload.pop("state_sha256", None)
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 def _as_result(value: CommandResult | str | Sequence[str] | None, argv: Sequence[str]) -> CommandResult:
@@ -146,8 +165,9 @@ def verify_container_inspect(inspect: Mapping[str, Any], contract: Mapping[str, 
         if isinstance(item, Mapping)
     }
     model_root = str(contract.get("model_root", ""))
-    if model_root:
-        _fail(f"{model_root}:/models" not in mount_strings, f"{role} model mount is missing or points at the wrong root")
+    model_path = str(contract.get("model_path", ""))
+    if model_root and model_path:
+        _fail(f"{model_root}:{model_path}" not in mount_strings, f"{role} model mount is missing or points at the wrong root")
 
 
 def _role_order() -> tuple[str, str]:
@@ -196,6 +216,65 @@ class DeploymentEngine:
             for key in REQUIRED_IMAGE_LABELS:
                 _fail(not labels.get(key), f"{role} image label {key} is empty")
 
+    def _fabric_preflight(self, role: str, *, require_address: bool = True) -> None:
+        if str(self.deployment.get("fabric_profile", "auto")) == "f0":
+            return
+        try:
+            spec = fabric_spec(self.config, role)
+            image_ref = str(self.contracts[role]["image"]["reference"])
+            commands = discovery_commands(self.config, role, image_ref)
+            if not require_address:
+                commands = [command for command in commands if command[0] != "ping" and not (command[0] == "docker" and "/bin/" in command)]
+            discovered_gid: int | None = None
+            for command in commands:
+                result = self._remote(role, command)
+                if spec["profile"] == "auto":
+                    continue
+                if command[:4] == ["ip", "-json", "address", "show"]:
+                    if require_address:
+                        parse_address_output(result.stdout, spec)
+                elif command[:4] == ["ip", "-json", "link", "show"]:
+                    if require_address:
+                        parse_link_output(result.stdout, spec)
+                elif command[:3] == ["rdma", "-j", "link"]:
+                    verify_rdma_output(result.stdout, spec)
+                elif command[0] == "docker" and "/bin/cat" in command:
+                    if require_address:
+                        parse_gid_output(result.stdout, spec)
+                elif command[0] == "docker" and "/bin/sh" in command:
+                    if require_address:
+                        discovered_gid, _ = parse_gid_discovery_output(result.stdout)
+                        key = f"{role}_roce_gid_index"
+                        configured = self.deployment.get(key)
+                        if configured is not None:
+                            _fail(int(configured) != discovered_gid, f"{role} discovered GID index differs from lock")
+                        self.deployment[key] = discovered_gid
+            if require_address and spec["profile"] == "f1":
+                gid_index = discovered_gid if discovered_gid is not None else self.deployment.get(f"{role}_roce_gid_index")
+                _fail(gid_index is None, f"{role} has no discovered GID index")
+                attrs = gid_attribute_commands(self.config, role, image_ref, int(gid_index))
+                attr_results = [self._remote(role, command) for command in attrs]
+                parse_gid_attributes(attr_results[0].stdout, attr_results[1].stdout, spec)
+        except FabricError as exc:
+            raise LifecycleError(str(exc)) from exc
+
+    def _apply_fabric(self) -> None:
+        if str(self.deployment.get("fabric_profile", "auto")) != "f1":
+            return
+        for role in _role_order():
+            try:
+                image_ref = str(self.contracts[role]["image"]["reference"])
+                for command in apply_commands(self.config, role, image_ref):
+                    self._remote(role, command)
+                self._fabric_preflight(role, require_address=True)
+            except FabricError as exc:
+                raise LifecycleError(str(exc)) from exc
+        self._refresh_contracts()
+
+    def _refresh_contracts(self) -> None:
+        self.contracts = {role: render_contract(self.config, role, self.lock) for role in ("worker", "head")}
+        self._validate_contracts()
+
     def _remote(self, role: str, argv: Sequence[str]) -> CommandResult:
         command = tuple(str(item) for item in argv)
         self.records.append(OperationRecord(role, command))
@@ -243,7 +322,7 @@ class DeploymentEngine:
         )
         _fail(not (current_owner or legacy_owner), f"refusing to mutate unowned {role} container")
 
-    def preflight(self, *, require_model_marker: bool = True) -> None:
+    def preflight(self, *, require_model_marker: bool = True, require_fabric: bool = True) -> None:
         """Check Docker/image/model/GPU/RDMA/network prerequisites on both nodes."""
 
         for role in _role_order():
@@ -255,20 +334,27 @@ class DeploymentEngine:
             self._remote(role, ["ip", "link", "show", iface])
             hca = str(self.deployment[f"{role}_hca"]).split(",", 1)[0]
             self._remote(role, ["ibdev2netdev", "-v"])
+            self._fabric_preflight(role, require_address=require_fabric)
             image_result = self._remote(role, ["docker", "image", "inspect", "--format", "{{json .}}", str(contract["image"]["reference"])])
             _fail(not image_result.stdout.strip(), f"{role} image inspect returned no data")
             image_object = _inspect_object(_json_stdout(image_result, f"{role} image inspect"), f"{role} image inspect")
             verify_image_inspect(image_object, contract["image"], role)
-            marker = str(Path(str(self.deployment["model_root"])) / ".model-lock.sha256")
+            model_root = Path(str(self.deployment["model_root"]))
+            model_path = Path(str(contract["model_path"]))
+            if model_root.name != model_path.name:
+                model_root = model_root / model_path.name
+            marker = str(model_root / ".model-lock.sha256")
+            marker_result: CommandResult | None = None
             try:
                 marker_result = self._remote(role, ["cat", marker])
             except LifecycleError:
                 if require_model_marker:
                     raise
-                marker_result = None
             if marker_result is not None:
                 _fail(marker_result.stdout.strip() != str(self.deployment["model_manifest_sha256"]), f"{role} model manifest marker does not match model lock")
-            self._remote(role, ["test", "-r", str(self.deployment["model_root"])])
+            for model_file in ("config.json", "model.safetensors.index.json", "tokenizer.json", "tokenizer_config.json"):
+                self._remote(role, ["test", "-r", str(model_root / model_file)])
+            self._remote(role, ["test", "-r", str(model_root)])
             self._remote(role, ["test", "-n", hca])
 
     def capture_rollback(self, state_file: Path) -> dict[str, Any]:
@@ -306,13 +392,19 @@ class DeploymentEngine:
                 },
                 "running": bool(state.get("Running")) if isinstance(state, Mapping) else False,
             }
+        fabric_state: dict[str, Any] = {}
+        if str(self.deployment.get("fabric_profile", "auto")) == "f1":
+            for role in _role_order():
+                fabric_state[role] = fabric_spec(self.config, role)
         state = {
             "schema_version": 1,
             "deployment_id": deployment_id(self.config),
             "mode": self.mode,
             "config_sha256": config_sha256(self.config),
+            "fabric": fabric_state,
             "roles": roles,
         }
+        state["state_sha256"] = _state_digest(state)
         state_file = state_file.expanduser()
         state_file.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".rollback.", dir=str(state_file.parent), text=True)
@@ -330,7 +422,11 @@ class DeploymentEngine:
 
     def _stage(self) -> None:
         remote_root = str(self.deployment["remote_root"])
-        remote_model_marker = str(Path(str(self.deployment["model_root"])) / ".model-lock.sha256")
+        model_root = Path(str(self.deployment["model_root"]))
+        model_path = Path(str(self.contracts["head"]["model_path"]))
+        if model_root.name != model_path.name:
+            model_root = model_root / model_path.name
+        remote_model_marker = str(model_root / ".model-lock.sha256")
         for role in _role_order():
             contract = self.contracts[role]
             cache_root = Path(str(self.deployment["cache_root"])) / ("dgx0" if role == "head" else "dgx1")
@@ -379,6 +475,12 @@ class DeploymentEngine:
 
     def _start(self) -> None:
         for role in _role_order():
+            inspect = self._inspect(role, allow_missing=True)
+            if inspect is not None:
+                self._assert_owned(role, inspect)
+                state = inspect.get("State")
+                if isinstance(state, Mapping) and bool(state.get("Running")):
+                    continue
             self._remote(role, ["docker", "container", "start", str(self.contracts[role]["container"])])
 
     def verify(self, *, readiness_attempts: int = 36, readiness_interval: float = 10.0, preflight: bool = True) -> None:
@@ -403,16 +505,31 @@ class DeploymentEngine:
                     self.sleep(readiness_interval)
         raise LifecycleError(f"service readiness failed after {readiness_attempts} attempts") from last_error
 
+    def _cleanup_partial(self) -> None:
+        """Remove only current-contract containers after an empty-target failure."""
+        for role in _role_order():
+            inspect = self._inspect(role, allow_missing=True)
+            if inspect is None:
+                continue
+            self._assert_owned(role, inspect)
+            state = inspect.get("State")
+            if isinstance(state, Mapping) and bool(state.get("Running")):
+                self._remote(role, ["docker", "container", "stop", "--time", "30", str(self.contracts[role]["container"])])
+            self._remote(role, ["docker", "container", "rm", str(self.contracts[role]["container"])])
+
     def apply(self, state_file: Path, *, update: bool = False) -> None:
         """Apply a locked contract; worker is always started before head."""
 
-        self.preflight()
+        self.preflight(require_model_marker=False, require_fabric=False)
         captured = self.capture_rollback(state_file)
         try:
+            self._apply_fabric()
+            self.preflight(require_model_marker=False, require_fabric=True)
             if update:
                 self._stop_owned()
                 self._remove_owned()
             self._stage()
+            self.preflight(require_model_marker=True, require_fabric=True)
             self._create()
             self._start()
             self.verify(preflight=False)
@@ -420,7 +537,14 @@ class DeploymentEngine:
             previous_roles = captured.get("roles", {})
             if update and isinstance(previous_roles, Mapping) and all(isinstance(previous_roles.get(role), Mapping) for role in _role_order()):
                 self.rollback(state_file)
+            else:
+                self._cleanup_partial()
             raise
+    def start(self) -> None:
+        self.preflight()
+        self._start()
+        self.verify(preflight=False)
+
 
     def stop(self) -> None:
         self._stop_owned()
@@ -435,6 +559,28 @@ class DeploymentEngine:
             _fail(str(inspect.get("Image", "")) != str(old["image"]), f"rollback {role} image differs from captured state")
             _fail(_command(inspect, f"rollback {role}") != tuple(str(item) for item in old["command"]), f"rollback {role} command differs from captured state")
             _fail(_labels(inspect, f"rollback {role}") != {str(k): str(v) for k, v in old["labels"].items()}, f"rollback {role} labels differ from captured state")
+            docker_config = inspect.get("Config")
+            _fail(not isinstance(docker_config, Mapping), f"rollback {role} Docker config is missing")
+            _fail(list(docker_config.get("Env", [])) != list(old["environment"]), f"rollback {role} environment differs from captured state")
+            _fail(str(docker_config.get("WorkingDir", "")) != str(old["working_dir"]), f"rollback {role} working directory differs from captured state")
+            actual_mounts = inspect.get("Mounts")
+            _fail(not isinstance(actual_mounts, list), f"rollback {role} mounts are missing")
+            mount_key = lambda mount: (str(mount.get("Type", "")), str(mount.get("Source", "")), str(mount.get("Destination", "")), bool(mount.get("RW", False)))
+            _fail(sorted(mount_key(mount) for mount in actual_mounts if isinstance(mount, Mapping)) != sorted(mount_key(mount) for mount in old["mounts"] if isinstance(mount, Mapping)), f"rollback {role} mounts differ from captured state")
+            actual_host = inspect.get("HostConfig")
+            expected_host = old["host_config"]
+            _fail(not isinstance(actual_host, Mapping) or not isinstance(expected_host, Mapping), f"rollback {role} host settings are missing")
+            for actual_key, expected_key in (
+                ("NetworkMode", "network_mode"),
+                ("IpcMode", "ipc_mode"),
+                ("Privileged", "privileged"),
+                ("ShmSize", "shm_size"),
+                ("ReadonlyRootfs", "readonly_rootfs"),
+            ):
+                _fail(actual_host.get(actual_key) != expected_host.get(expected_key), f"rollback {role} host setting {actual_key} differs from captured state")
+            _fail(list(actual_host.get("SecurityOpt") or []) != list(expected_host.get("security_opt") or []), f"rollback {role} security settings differ from captured state")
+            _fail(list(actual_host.get("Ulimits") or []) != list(expected_host.get("ulimits") or []), f"rollback {role} ulimits differ from captured state")
+            _fail(list(actual_host.get("DeviceRequests") or []) != list(expected_host.get("device_requests") or []), f"rollback {role} GPU requests differ from captured state")
             state = inspect.get("State")
             running = bool(state.get("Running")) if isinstance(state, Mapping) else False
             _fail(running != bool(old["running"]), f"rollback {role} running state differs from captured state")
@@ -453,8 +599,12 @@ class DeploymentEngine:
             current_image = str(self.contracts[role]["image"]["image_id"])
             _fail(actual_name != str(old["name"]), f"rollback found an unexpected {role} name")
             _fail(actual_image not in {str(old["image"]), current_image}, f"rollback found an unexpected {role} image")
-            actual_command = _command(inspect, f"rollback {role}")
-            _fail(actual_command not in {tuple(str(item) for item in old["command"]), tuple(str(item) for item in self.contracts[role]["service_argv"])}, f"rollback found an unexpected {role} command")
+            actual_labels = _labels(inspect, f"rollback {role}")
+            old_labels = old["labels"]
+            _fail(not isinstance(old_labels, Mapping), f"rollback {role} captured labels are malformed")
+            current_owned = actual_labels.get("com.dgx-spark.deployment_id") == self.contracts[role]["deployment_id"] and actual_labels.get("com.dgx-spark.role") == role
+            captured_owned = actual_labels == {str(key): str(value) for key, value in old_labels.items()}
+            _fail(not (current_owned or captured_owned), f"rollback refusing to remove unowned {role} target")
             state = inspect.get("State")
             if isinstance(state, Mapping) and bool(state.get("Running")):
                 self._remote(role, ["docker", "container", "stop", "--time", "30", str(old["name"])])
@@ -468,10 +618,10 @@ class DeploymentEngine:
             state = json.loads(state_file.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise LifecycleError(f"cannot read rollback state: {state_file}") from exc
-        _fail(not isinstance(state, Mapping), "rollback state must be an object")
+        _fail(not isinstance(state.get("state_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", str(state.get("state_sha256"))), "rollback state hash is missing or malformed")
+        _fail(str(state["state_sha256"]) != _state_digest(state), "rollback state integrity hash does not match")
         _fail(state.get("schema_version") != 1, "rollback state schema_version is unsupported")
         _fail(state.get("deployment_id") != deployment_id(self.config), "rollback state deployment ID does not match")
-        _fail(state.get("mode") != self.mode, "rollback state mode does not match")
         roles = state.get("roles")
         _fail(not isinstance(roles, Mapping), "rollback state roles are missing")
         for role in _role_order():

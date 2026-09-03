@@ -8,6 +8,7 @@ from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from .config import DEFAULT_MODEL_CONTAINER_PATH, canonical_json, config_sha256
+from .fabric import apply_commands, discovery_commands, fabric_spec
 from .manifest import deployment_id
 from .redact import redact_mapping
 
@@ -101,6 +102,10 @@ def _mode(config: Mapping[str, Any]) -> str:
     return mode
 
 
+def _model_mount_destination(config: Mapping[str, Any]) -> str:
+    model_root = PurePosixPath(str(_deployment(config)["model_root"]))
+    return _model_path(config) if model_root.name == PurePosixPath(_model_path(config)).name else "/models"
+
 def _container_name(config: Mapping[str, Any], role: str) -> str:
     mode = _mode(config)
     if mode == "production":
@@ -156,10 +161,18 @@ def render_environment(config: Mapping[str, Any], role: str) -> dict[str, str]:
             "CUDA_VISIBLE_DEVICES": _role_value(deployment, role, "cuda_visible_devices"),
         }
     )
-    gid = deployment.get("roce_gid_index")
+    gid = deployment.get(f"{role}_roce_gid_index") or deployment.get("roce_gid_index")
     if gid is not None:
         result["NCCL_IB_GID_INDEX"] = str(gid)
     result["NCCL_IB_MTU"] = str(deployment["roce_mtu"])
+    if deployment.get("fabric_profile") in {"f0", "f1"}:
+        result["DGX_SPARK_FABRIC_PROFILE"] = str(deployment["fabric_profile"])
+    cidr = deployment.get(f"{role}_fabric_cidr")
+    peer = deployment.get(f"{role}_fabric_peer")
+    if cidr:
+        result["DGX_SPARK_FABRIC_CIDR"] = str(cidr)
+    if peer:
+        result["DGX_SPARK_FABRIC_PEER"] = str(peer)
     return dict(sorted(result.items()))
 
 
@@ -342,7 +355,7 @@ def render_container_argv(
             "--env-file",
             env_source,
             "--mount",
-            f"type=bind,src={deployment['model_root']},dst=/models,readonly",
+            f"type=bind,src={deployment['model_root']},dst={_model_mount_destination(config)},readonly",
         ]
     )
     for suffix, destination in (
@@ -377,6 +390,7 @@ def render_contract(config: Mapping[str, Any], role: str, lock: Mapping[str, Any
         "container": _container_name(config, role),
         "host": _role_value(_deployment(config), role, "host"),
         "node_addr": _role_value(_deployment(config), role, "node_addr"),
+        "fabric": fabric_spec(config, role),
         "api_port": int(_deployment(config)["api_port"]) if role == "head" else None,
         "master_addr": str(_deployment(config)["master_addr"]),
         "master_port": int(_deployment(config)["master_port"]),
@@ -394,9 +408,9 @@ def render_contract(config: Mapping[str, Any], role: str, lock: Mapping[str, Any
         for key in (
             "schema_version",
             "mode",
-            "profile_id",
             "role",
             "node_addr",
+            "fabric",
             "api_port",
             "master_addr",
             "master_port",
@@ -416,6 +430,16 @@ def render_contract_json(config: Mapping[str, Any], role: str, lock: Mapping[str
 
 def render_plan(config: Mapping[str, Any], lock: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Render a redacted deterministic plan; this function performs no I/O."""
+    roles = {role: render_contract(config, role, lock) for role in _ROLES}
+    fabric_commands: dict[str, Any] = {}
+    if _deployment(config).get("fabric_profile") == "f1":
+        for role in _ROLES:
+            image_ref = str(roles[role]["image"]["reference"])
+            fabric_commands[role] = {
+                "discovery": discovery_commands(config, role, image_ref),
+                "apply": apply_commands(config, role, image_ref),
+            }
+
 
     plan = {
         "schema_version": 1,
@@ -423,24 +447,26 @@ def render_plan(config: Mapping[str, Any], lock: Mapping[str, Any] | None = None
         "config_sha256": config_sha256(config),
         "profile_id": config["profile"]["profile_id"],
         "mode": _mode(config),
+        "fabric_profile": _deployment(config).get("fabric_profile", "auto"),
         "ports": {
             "api": int(_deployment(config)["api_port"]),
             "master": int(_deployment(config)["master_port"]),
             "forward": int(_deployment(config)["forward_local_port"]),
         },
-        "actions": [
-            "preflight",
-            "capture-rollback",
-            "stage-contracts",
-            "create-worker",
-            "create-head",
-            "start-worker",
-            "start-head",
-            "verify",
-        ],
-        "roles": {
-            role: render_contract(config, role, lock)
-            for role in _ROLES
-        },
+        "actions": (
+            (["fabric-discover", "fabric-apply-networkmanager", "fabric-verify"] if _deployment(config).get("fabric_profile") == "f1" else [])
+            + [
+                "preflight",
+                "capture-rollback",
+                "stage-contracts",
+                "create-worker",
+                "create-head",
+                "start-worker",
+                "start-head",
+                "verify",
+            ]
+        ),
+        "fabric_commands": fabric_commands,
+        "roles": roles,
     }
     return redact_mapping(plan)
