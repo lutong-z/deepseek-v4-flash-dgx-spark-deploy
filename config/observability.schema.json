@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dgx-spark-deepseek-v4-deploy/observability.schema.json",
+  "title": "DGX Spark observability profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile_id", "architecture", "service", "network", "components", "volumes", "retention", "intervals", "start_order"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "architecture": {"const": "linux/arm64"},
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_port", "metrics_path", "health_path", "models_path"],
+      "properties": {
+        "api_port": {"const": 8101},
+        "metrics_path": {"const": "/metrics"},
+        "health_path": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]+$"},
+        "models_path": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]+$"}
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head_addr", "worker_addr", "interface", "hca", "mtu", "ports"],
+      "properties": {
+        "head_addr": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
+        "worker_addr": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
+        "interface": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"},
+        "hca": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"},
+        "mtu": {"type": "integer", "minimum": 576, "maximum": 65535},
+        "ports": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["grafana", "loki", "prometheus", "alertmanager", "node_exporter", "fabric_exporter"],
+          "properties": {
+            "grafana": {"const": 13000},
+            "loki": {"const": 13100},
+            "prometheus": {"const": 19090},
+            "alertmanager": {"const": 19093},
+            "node_exporter": {"const": 19100},
+            "fabric_exporter": {"const": 19110}
+          }
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prometheus", "grafana", "alertmanager", "loki", "promtail_head", "promtail_worker", "node_exporter_head", "node_exporter_worker", "fabric_exporter_head", "fabric_exporter_worker"],
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "container", "image_lock_key", "memory", "cpus"],
+          "properties": {
+            "role": {"enum": ["head", "worker"]},
+            "container": {"type": "string", "pattern": "^dgx-observe-[a-z0-9-]+$"},
+            "image_lock_key": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+            "memory": {"type": "string", "pattern": "^[1-9][0-9]*(?:m|g)$"},
+            "cpus": {"type": "string", "pattern": "^(?:[0-9]+(?:\\.[0-9]+)?)$"}
+          }
+        }
+      }
+    },
+    "volumes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prometheus", "grafana", "alertmanager", "loki", "promtail_head", "promtail_worker"],
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {"type": "string", "pattern": "^dgx-observe-[a-z0-9-]+$"}
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prometheus_time", "prometheus_size", "loki_hours"],
+      "properties": {
+        "prometheus_time": {"type": "string", "pattern": "^[1-9][0-9]*d$"},
+        "prometheus_size": {"type": "string", "pattern": "^[1-9][0-9]*(?:MB|GB|TB)$"},
+        "loki_hours": {"type": "integer", "minimum": 1}
+      }
+    },
+    "intervals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scrape", "evaluation"],
+      "properties": {
+        "scrape": {"type": "string", "pattern": "^[1-9][0-9]*s$"},
+        "evaluation": {"type": "string", "pattern": "^[1-9][0-9]*s$"}
+      }
+    },
+    "start_order": {
+      "type": "array",
+      "minItems": 10,
+      "uniqueItems": true,
+      "items": {"type": "string", "enum": ["prometheus", "grafana", "alertmanager", "loki", "promtail_head", "promtail_worker", "node_exporter_head", "node_exporter_worker", "fabric_exporter_head", "fabric_exporter_worker"]}
+    }
+  }
+}

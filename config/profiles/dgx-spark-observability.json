@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "profile_id": "dgx-spark-observability-v1",
+  "architecture": "linux/arm64",
+  "service": {
+    "api_port": 8101,
+    "metrics_path": "/metrics",
+    "health_path": "/health",
+    "models_path": "/v1/models"
+  },
+  "network": {
+    "head_addr": "192.168.100.10",
+    "worker_addr": "192.168.100.11",
+    "interface": "enp1s0f1np1",
+    "hca": "rocep1s0f1",
+    "mtu": 9000,
+    "ports": {
+      "grafana": 13000,
+      "loki": 13100,
+      "prometheus": 19090,
+      "alertmanager": 19093,
+      "node_exporter": 19100,
+      "fabric_exporter": 19110
+    }
+  },
+  "components": {
+    "prometheus": {
+      "role": "head",
+      "container": "dgx-observe-prometheus",
+      "image_lock_key": "prometheus",
+      "memory": "4g",
+      "cpus": "2"
+    },
+    "grafana": {
+      "role": "head",
+      "container": "dgx-observe-grafana",
+      "image_lock_key": "grafana",
+      "memory": "1g",
+      "cpus": "1"
+    },
+    "alertmanager": {
+      "role": "head",
+      "container": "dgx-observe-alertmanager",
+      "image_lock_key": "alertmanager",
+      "memory": "512m",
+      "cpus": "0.5"
+    },
+    "loki": {
+      "role": "head",
+      "container": "dgx-observe-loki",
+      "image_lock_key": "loki",
+      "memory": "2g",
+      "cpus": "1"
+    },
+    "promtail_head": {
+      "role": "head",
+      "container": "dgx-observe-promtail-head",
+      "image_lock_key": "promtail",
+      "memory": "512m",
+      "cpus": "0.5"
+    },
+    "promtail_worker": {
+      "role": "worker",
+      "container": "dgx-observe-promtail-worker",
+      "image_lock_key": "promtail",
+      "memory": "512m",
+      "cpus": "0.5"
+    },
+    "node_exporter_head": {
+      "role": "head",
+      "container": "dgx-observe-node-exporter-head",
+      "image_lock_key": "node_exporter",
+      "memory": "256m",
+      "cpus": "0.25"
+    },
+    "node_exporter_worker": {
+      "role": "worker",
+      "container": "dgx-observe-node-exporter-worker",
+      "image_lock_key": "node_exporter",
+      "memory": "256m",
+      "cpus": "0.25"
+    },
+    "fabric_exporter_head": {
+      "role": "head",
+      "container": "dgx-observe-fabric-exporter-head",
+      "image_lock_key": "fabric_exporter_head",
+      "memory": "256m",
+      "cpus": "0.25"
+    },
+    "fabric_exporter_worker": {
+      "role": "worker",
+      "container": "dgx-observe-fabric-exporter-worker",
+      "image_lock_key": "fabric_exporter_worker",
+      "memory": "256m",
+      "cpus": "0.25"
+    }
+  },
+  "volumes": {
+    "prometheus": "dgx-observe-prometheus-data",
+    "grafana": "dgx-observe-grafana-data",
+    "alertmanager": "dgx-observe-alertmanager-data",
+    "loki": "dgx-observe-loki-data",
+    "promtail_head": "dgx-observe-promtail-head-positions",
+    "promtail_worker": "dgx-observe-promtail-worker-positions"
+  },
+  "retention": {
+    "prometheus_time": "7d",
+    "prometheus_size": "10GB",
+    "loki_hours": 168
+  },
+  "intervals": {
+    "scrape": "15s",
+    "evaluation": "15s"
+  },
+  "start_order": [
+    "node_exporter_worker",
+    "fabric_exporter_worker",
+    "promtail_worker",
+    "node_exporter_head",
+    "fabric_exporter_head",
+    "promtail_head",
+    "loki",
+    "alertmanager",
+    "prometheus",
+    "grafana"
+  ]
+}

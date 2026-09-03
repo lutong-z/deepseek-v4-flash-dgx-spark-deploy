@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dgx-spark-deepseek-v4-deploy/observability-image-lock.schema.json",
+  "title": "DGX Spark observability external image lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "architecture", "images"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "ready"},
+    "architecture": {"const": "linux/arm64"},
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prometheus", "grafana", "alertmanager", "loki", "promtail", "node_exporter", "fabric_exporter"],
+      "properties": {
+        "prometheus": {"$ref": "#/$defs/image"},
+        "grafana": {"$ref": "#/$defs/image"},
+        "alertmanager": {"$ref": "#/$defs/image"},
+        "loki": {"$ref": "#/$defs/image"},
+        "promtail": {"$ref": "#/$defs/image"},
+        "node_exporter": {"$ref": "#/$defs/image"},
+        "fabric_exporter": {"$ref": "#/$defs/image"}
+      }
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "digest", "image_id"],
+      "properties": {
+        "reference": {"type": "string", "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._/-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*)@sha256:[0-9a-f]{64}$"},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "image_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    }
+  }
+}
