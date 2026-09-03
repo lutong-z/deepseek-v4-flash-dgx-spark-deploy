@@ -121,6 +121,10 @@ class FabricTests(unittest.TestCase):
             self.assertTrue(commands["discovery"])
             self.assertTrue(commands["apply"])
             self.assertTrue(all("f0" not in token for group in commands.values() for command in group for token in command if isinstance(token, str)))
+        self.assertEqual(
+            plan["actions"][:6],
+            ["preflight", "capture-rollback", "fabric-apply-networkmanager", "fabric-discover", "fabric-verify", "preflight"],
+        )
 
     def test_f1_apply_networks_both_roles_before_peer_readback(self) -> None:
         config = self._f1_config()

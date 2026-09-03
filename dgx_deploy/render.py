@@ -455,10 +455,19 @@ def render_plan(config: Mapping[str, Any], lock: Mapping[str, Any] | None = None
             "forward": int(_deployment(config)["forward_local_port"]),
         },
         "actions": (
-            (["fabric-discover", "fabric-apply-networkmanager", "fabric-verify"] if _deployment(config).get("fabric_profile") == "f1" else [])
+            (
+                [
+                    "preflight",
+                    "capture-rollback",
+                    "fabric-apply-networkmanager",
+                    "fabric-discover",
+                    "fabric-verify",
+                    "preflight",
+                ]
+                if _deployment(config).get("fabric_profile") == "f1"
+                else ["preflight", "capture-rollback"]
+            )
             + [
-                "preflight",
-                "capture-rollback",
                 "stage-contracts",
                 "create-worker",
                 "create-head",
