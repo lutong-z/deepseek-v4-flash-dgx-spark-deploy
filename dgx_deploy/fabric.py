@@ -41,6 +41,8 @@ def profile(config: Mapping[str, Any]) -> str:
 def fabric_spec(config: Mapping[str, Any], role: str) -> dict[str, Any]:
     deployment = config.get("deployment")
     _fail(not isinstance(deployment, Mapping), "deployment section is missing")
+    role_gid = deployment.get(f"{role}_roce_gid_index")
+    global_gid = deployment.get("roce_gid_index")
     value: dict[str, Any] = {
         "profile": profile(config),
         "role": role,
@@ -50,7 +52,7 @@ def fabric_spec(config: Mapping[str, Any], role: str) -> dict[str, Any]:
         "peer": deployment.get(f"{role}_fabric_peer"),
         "cidr": deployment.get(f"{role}_fabric_cidr"),
         "connection": deployment.get(f"{role}_fabric_connection"),
-        "gid_index": deployment.get(f"{role}_roce_gid_index") or deployment.get("roce_gid_index"),
+        "gid_index": role_gid if role_gid is not None else global_gid,
         "mtu": int(deployment["roce_mtu"]),
     }
     if value["profile"] == "f1":

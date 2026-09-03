@@ -161,7 +161,8 @@ def render_environment(config: Mapping[str, Any], role: str) -> dict[str, str]:
             "CUDA_VISIBLE_DEVICES": _role_value(deployment, role, "cuda_visible_devices"),
         }
     )
-    gid = deployment.get(f"{role}_roce_gid_index") or deployment.get("roce_gid_index")
+    role_gid = deployment.get(f"{role}_roce_gid_index")
+    gid = role_gid if role_gid is not None else deployment.get("roce_gid_index")
     if gid is not None:
         result["NCCL_IB_GID_INDEX"] = str(gid)
     result["NCCL_IB_MTU"] = str(deployment["roce_mtu"])

@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 
 from dgx_deploy.config import DEFAULT_PROFILE, ConfigError, load_config
+from dgx_deploy.lifecycle import DeploymentEngine
+from dgx_deploy.remote import CommandResult
 from dgx_deploy.fabric import (
     FabricError,
     apply_commands,
@@ -16,7 +18,7 @@ from dgx_deploy.fabric import (
     parse_gid_output,
     parse_link_output,
 )
-from dgx_deploy.render import render_plan
+from dgx_deploy.render import render_environment, render_plan
 from test_config import valid_env, write_env
 
 
@@ -68,6 +70,16 @@ class FabricTests(unittest.TestCase):
         self.assertNotIn("enP2p1s0f1", flattened)
         self.assertNotIn("roceP2p1s0f1", flattened)
 
+    def test_role_gid_zero_is_not_replaced_by_global_gid(self) -> None:
+        config = self._f1_config()
+        deployment = dict(config["deployment"])
+        deployment["head_roce_gid_index"] = 0
+        deployment["roce_gid_index"] = 7
+        config = dict(config)
+        config["deployment"] = deployment
+        self.assertEqual(fabric_spec(config, "head")["gid_index"], 0)
+        self.assertEqual(render_environment(config, "head")["NCCL_IB_GID_INDEX"], "0")
+
     def test_f1_nm_apply_persists_address_mtu_and_autoconnect(self) -> None:
         config = self._f1_config()
         commands = apply_commands(config, "head", "registry.example.invalid/head@sha256:" + "c" * 64)
@@ -109,6 +121,44 @@ class FabricTests(unittest.TestCase):
             self.assertTrue(commands["discovery"])
             self.assertTrue(commands["apply"])
             self.assertTrue(all("f0" not in token for group in commands.values() for command in group for token in command if isinstance(token, str)))
+
+    def test_f1_apply_networks_both_roles_before_peer_readback(self) -> None:
+        config = self._f1_config()
+        labels = {
+            "org.opencontainers.image.revision": "a" * 40,
+            "com.dgx-spark.architecture": "linux/arm64",
+            "com.dgx-spark.profile_sha256": "b" * 64,
+            "com.dgx-spark.service_contract_sha256": "c" * 64,
+            "com.dgx-spark.image_lock_sha256": "d" * 64,
+            "com.dgx-spark.vllm.commit": "e" * 40,
+            "com.dgx-spark.b12x.commit": "f" * 40,
+        }
+        lock = {
+            "images": {
+                "worker": {
+                    "reference": config["deployment"]["worker_image_ref"],
+                    "image_id": "sha256:" + "1" * 64,
+                    "labels": labels,
+                },
+                "head": {
+                    "reference": config["deployment"]["head_image_ref"],
+                    "image_id": "sha256:" + "2" * 64,
+                    "labels": labels,
+                },
+            }
+        }
+        events: list[tuple[str, str]] = []
+        engine = DeploymentEngine(config, lock, runner=lambda role, command: CommandResult(tuple(command), 0, "", ""))
+        engine._remote = lambda role, command: events.append(("apply", role)) or CommandResult(tuple(command), 0, "", "")
+        engine._fabric_preflight = lambda role, **kwargs: events.append(("preflight", role))
+        engine._refresh_contracts = lambda: None
+        engine._apply_fabric()
+        apply_events = [event for event in events if event[0] == "apply"]
+        preflight_events = [event for event in events if event[0] == "preflight"]
+        self.assertEqual(apply_events[:6], [("apply", "worker")] * 6)
+        self.assertEqual(apply_events[6:12], [("apply", "head")] * 6)
+        self.assertEqual(preflight_events, [("preflight", "worker"), ("preflight", "head")])
+        self.assertLess(events.index(("apply", "head")), events.index(("preflight", "worker")))
 
     def test_f1_readback_checks_address_link_and_gid(self) -> None:
         config = self._f1_config()

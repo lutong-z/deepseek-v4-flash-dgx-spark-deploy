@@ -266,9 +266,10 @@ class DeploymentEngine:
                 image_ref = str(self.contracts[role]["image"]["reference"])
                 for command in apply_commands(self.config, role, image_ref):
                     self._remote(role, command)
-                self._fabric_preflight(role, require_address=True)
             except FabricError as exc:
                 raise LifecycleError(str(exc)) from exc
+        for role in _role_order():
+            self._fabric_preflight(role, require_address=True)
         self._refresh_contracts()
 
     def _refresh_contracts(self) -> None:
