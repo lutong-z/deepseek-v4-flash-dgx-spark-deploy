@@ -42,6 +42,8 @@ from .render import RenderError, render_contract, render_contract_json, render_c
 class LifecycleError(ConfigError):
     """A lifecycle precondition, operation, or verification gate failed."""
 
+_CANDIDATE_REF = re.compile(r"(?:^|[/:._-])candidate(?:[/:._-]|$)", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class RoleState:
@@ -212,6 +214,17 @@ class DeploymentEngine:
         for role in ("worker", "head"):
             image = self.contracts[role]["image"]
             _fail(not isinstance(image, Mapping), f"{role} image lock is malformed")
+            reference = str(image.get("reference", ""))
+            image_id = str(image.get("image_id", ""))
+            is_candidate = _CANDIDATE_REF.search(reference) is not None
+            if self.mode == "candidate" and not is_candidate:
+                _fail(
+                    not bool(self.deployment.get("allow_production_images_in_candidate")),
+                    "candidate production image reuse requires explicit authorization",
+                )
+                _fail(reference != image_id, f"candidate {role} production image reference must equal its locked image ID")
+            if self.mode == "production":
+                _fail(is_candidate, f"production {role} image reference must not be candidate-namespaced")
             labels = image.get("labels")
             _fail(not isinstance(labels, Mapping), f"{role} image labels are missing")
             for key in REQUIRED_IMAGE_LABELS:
@@ -615,6 +628,30 @@ class DeploymentEngine:
                 self._remote(role, ["docker", "container", "stop", "--time", "30", str(old["name"])])
             self._remote(role, ["docker", "container", "rm", str(old["name"])])
 
+    def _remove_empty_rollback_targets(self) -> None:
+        """Remove an exact candidate pair when no previous pair was captured."""
+        inspected: dict[str, Mapping[str, Any] | None] = {}
+        # Validate both targets before mutating either one.  An empty rollback
+        # state has no prior names to authorize; ownership must come entirely
+        # from the current candidate contracts.
+        for role in _role_order():
+            inspect = self._inspect(role, allow_missing=True)
+            if inspect is not None:
+                self._assert_owned(role, inspect)
+            inspected[role] = inspect
+        for role in _role_order():
+            inspect = inspected[role]
+            if inspect is None:
+                continue
+            state = inspect.get("State")
+            name = str(self.contracts[role]["container"])
+            if isinstance(state, Mapping) and bool(state.get("Running")):
+                self._remote(role, ["docker", "container", "stop", "--time", "30", name])
+            self._remote(role, ["docker", "container", "rm", name])
+        for role in _role_order():
+            remaining = self._inspect(role, allow_missing=True)
+            _fail(remaining is not None, f"rollback empty {role} container remains")
+
 
     def rollback(self, state_file: Path) -> None:
         """Restore exact captured commands/images, refusing incomplete state."""
@@ -629,8 +666,15 @@ class DeploymentEngine:
         _fail(state.get("deployment_id") != deployment_id(self.config), "rollback state deployment ID does not match")
         roles = state.get("roles")
         _fail(not isinstance(roles, Mapping), "rollback state roles are missing")
+        _fail(any(role not in roles for role in _role_order()), "rollback state roles are missing a deployment role")
+        role_states = {role: roles[role] for role in _role_order()}
+        if all(role_states[role] is None for role in _role_order()):
+            _fail(self.mode != "candidate", "empty rollback state is allowed only in candidate mode")
+            self._remove_empty_rollback_targets()
+            return
+        _fail(any(role_states[role] is None for role in _role_order()), "rollback state must contain both previous roles or neither")
         for role in _role_order():
-            old = roles.get(role)
+            old = role_states[role]
             _fail(not isinstance(old, Mapping), f"rollback state has no previous {role} contract")
             for key in ("name", "image", "command", "labels", "environment", "mounts", "working_dir", "host_config", "running"):
                 _fail(key not in old, f"rollback state {role} is missing {key}")
@@ -638,11 +682,11 @@ class DeploymentEngine:
         # currently-owned pair.  The old command vector and labels remain
         # entirely state-file controlled.
         for role in _role_order():
-            old = roles[role]
+            old = role_states[role]
             self._remote(role, ["docker", "image", "inspect", str(old["image"])])
-        self._remove_rollback_targets(roles)
+        self._remove_rollback_targets(role_states)
         for role in _role_order():
-            old = roles[role]
+            old = role_states[role]
             create = ["docker", "container", "create", "--name", str(old["name"])]
             host_config = old["host_config"]
             _fail(not isinstance(host_config, Mapping), f"rollback {role} host configuration is malformed")
@@ -701,7 +745,8 @@ class DeploymentEngine:
             self._remote(role, create)
             if bool(old["running"]):
                 self._remote(role, ["docker", "container", "start", str(old["name"])])
-        self._verify_rollback(roles)
+        self._verify_rollback(role_states)
+
 
 
 def load_engine(config: Mapping[str, Any]) -> DeploymentEngine:
