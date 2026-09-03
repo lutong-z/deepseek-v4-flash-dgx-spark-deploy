@@ -223,7 +223,9 @@ class DeploymentEngine:
             spec = fabric_spec(self.config, role)
             image_ref = str(self.contracts[role]["image"]["reference"])
             commands = discovery_commands(self.config, role, image_ref)
-            if not require_address:
+            if not require_address and spec["profile"] == "f1":
+                commands = []
+            elif not require_address:
                 commands = [command for command in commands if command[0] != "ping" and not (command[0] == "docker" and "/bin/" in command)]
             discovered_gid: int | None = None
             for command in commands:
@@ -237,7 +239,8 @@ class DeploymentEngine:
                     if require_address:
                         parse_link_output(result.stdout, spec)
                 elif command[:3] == ["rdma", "-j", "link"]:
-                    verify_rdma_output(result.stdout, spec)
+                    if require_address:
+                        verify_rdma_output(result.stdout, spec)
                 elif command[0] == "docker" and "/bin/cat" in command:
                     if require_address:
                         parse_gid_output(result.stdout, spec)

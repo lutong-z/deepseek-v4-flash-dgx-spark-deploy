@@ -149,6 +149,9 @@ class FabricTests(unittest.TestCase):
         }
         events: list[tuple[str, str]] = []
         engine = DeploymentEngine(config, lock, runner=lambda role, command: CommandResult(tuple(command), 0, "", ""))
+        engine._remote = lambda role, command: events.append(("skipped", role)) or CommandResult(tuple(command), 0, "", "")
+        engine._fabric_preflight("worker", require_address=False)
+        self.assertEqual(events, [])
         engine._remote = lambda role, command: events.append(("apply", role)) or CommandResult(tuple(command), 0, "", "")
         engine._fabric_preflight = lambda role, **kwargs: events.append(("preflight", role))
         engine._refresh_contracts = lambda: None
