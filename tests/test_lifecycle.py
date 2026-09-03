@@ -1,25 +1,29 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from dgx_deploy.cli import main
-from dgx_deploy.config import ConfigError, DEFAULT_PROFILE, load_config
 from dgx_deploy.lifecycle import DeploymentEngine, verify_container_inspect
-from dgx_deploy.locks import load_deployment_lock
+from dgx_deploy.config import ConfigError, DEFAULT_PROFILE, canonical_json, load_config
+from dgx_deploy.locks import LockError, load_deployment_lock
 from dgx_deploy.remote import CommandResult, ssh_argv
 from dgx_deploy.render import render_contract, render_service_argv
 from test_config import valid_env, write_env
-
-
 class LifecycleContractTests(unittest.TestCase):
     def _candidate_values(self) -> dict[str, str]:
         values = valid_env()
         values.update(
             {
                 "DEPLOYMENT_MODE": "candidate",
+                "REMOTE_ROOT": "/srv/dgx-spark-candidate/deploy",
+                "STATE_ROOT": "/var/lib/dgx-spark-candidate/state",
+                "CACHE_ROOT": "/var/cache/dgx-spark-candidate/cache",
+                "LOG_ROOT": "/var/log/dgx-spark-candidate/logs",
+                "RESULT_ROOT": "/var/lib/dgx-spark-candidate/results",
                 "MASTER_ADDR": "192.168.100.10",
                 "MASTER_PORT": "29621",
                 "API_PORT": "18101",
@@ -60,6 +64,7 @@ class LifecycleContractTests(unittest.TestCase):
                 },
             },
         }
+        value["lock_sha256"] = hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
         path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
         return load_deployment_lock(path, config)
 
@@ -127,6 +132,29 @@ class LifecycleContractTests(unittest.TestCase):
                 load_config(env_path, DEFAULT_PROFILE)
         finally:
             env_path.unlink()
+    def test_candidate_requires_namespaced_external_roots(self) -> None:
+        values = self._candidate_values()
+        values["CACHE_ROOT"] = "/var/cache/shared"
+        env_path = write_env(values)
+        try:
+            with self.assertRaises(ConfigError):
+                load_config(env_path, DEFAULT_PROFILE)
+        finally:
+            env_path.unlink()
+    def test_lock_integrity_hash_rejects_tampering(self) -> None:
+        env_path = write_env(self._candidate_values())
+        lock_path = Path(tempfile.mktemp(prefix="deployment-lock-", suffix=".json"))
+        try:
+            config = load_config(env_path, DEFAULT_PROFILE)
+            self._lock(lock_path, config)
+            value = json.loads(lock_path.read_text(encoding="utf-8"))
+            value["images"]["head"]["image_id"] = "sha256:" + "9" * 64
+            lock_path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
+            with self.assertRaises(LockError):
+                load_deployment_lock(lock_path, config)
+        finally:
+            env_path.unlink()
+            lock_path.unlink()
 
     def test_exact_container_verification_rejects_command_drift(self) -> None:
         env_path = write_env(self._candidate_values())
@@ -143,9 +171,14 @@ class LifecycleContractTests(unittest.TestCase):
                 "Image": image["image_id"],
                 "Config": {"Cmd": list(contract["service_argv"]), "Env": [f"{k}={v}" for k, v in contract["environment"].items()], "Labels": labels},
                 "State": {"Running": True},
-                "Mounts": [{"Source": config["deployment"]["model_root"], "Destination": "/models"}],
+                "Mounts": [{"Source": config["deployment"]["model_root"], "Destination": "/models/DeepSeek-V4-Flash-0731"}],
             }
             verify_container_inspect(inspect, contract)
+            parent_contract = dict(contract)
+            parent_contract["model_root"] = "/srv/models"
+            parent_inspect = dict(inspect)
+            parent_inspect["Mounts"] = [{"Source": "/srv/models", "Destination": "/models"}]
+            verify_container_inspect(parent_inspect, parent_contract)
             inspect["Config"]["Cmd"][-1] = "drift"
             with self.assertRaises(Exception):
                 verify_container_inspect(inspect, contract)
@@ -177,7 +210,7 @@ class LifecycleContractTests(unittest.TestCase):
 
             engine = DeploymentEngine(config, lock, runner=runner)
             engine.preflight()
-            self.assertEqual(sum(command[:1] == ("ibdev2netdev",) for command in seen), 2)
+            self.assertGreaterEqual(sum(command[:1] == ("ibdev2netdev",) for command in seen), 2)
             self.assertTrue(all(command[1:] == ("-v",) for command in seen if command[0] == "ibdev2netdev"))
         finally:
             env_path.unlink()

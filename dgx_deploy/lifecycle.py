@@ -167,7 +167,8 @@ def verify_container_inspect(inspect: Mapping[str, Any], contract: Mapping[str, 
     model_root = str(contract.get("model_root", ""))
     model_path = str(contract.get("model_path", ""))
     if model_root and model_path:
-        _fail(f"{model_root}:{model_path}" not in mount_strings, f"{role} model mount is missing or points at the wrong root")
+        model_destination = model_path if Path(model_root).name == Path(model_path).name else "/models"
+        _fail(f"{model_root}:{model_destination}" not in mount_strings, f"{role} model mount is missing or points at the wrong root")
 
 
 def _role_order() -> tuple[str, str]:
