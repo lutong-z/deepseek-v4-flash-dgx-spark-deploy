@@ -287,7 +287,9 @@ def _config(
     ssh_port = _int_value(_first(env, "OBS_SSH_PORT", "SSH_PORT", default="22"), "OBS_SSH_PORT")
     remote_root_value = _first(env, "OBS_REMOTE_ROOT", default="/tmp/dgx-spark-observability-render")
     remote_root = _validate_abs_path(remote_root_value, "OBS_REMOTE_ROOT", external=require_remote)
-    bind_addr = _first(env, "OBS_BIND_ADDR", default="127.0.0.1")
+    # Bind every observability endpoint on all interfaces so the stack is
+    # reachable over Tailscale (or any routed network) without a tunnel.
+    bind_addr = _first(env, "OBS_BIND_ADDR", default="0.0.0.0")
     if bind_addr not in ("0.0.0.0", "127.0.0.1", "::1"):
         _fail("OBS_BIND_ADDR must be 0.0.0.0, 127.0.0.1, or ::1")
     vllm_port = _int_value(_first(env, "OBS_VLLM_PORT", "API_PORT", default="8101"), "OBS_VLLM_PORT")
@@ -302,7 +304,9 @@ def _config(
     admin_user = _first(env, "OBS_GRAFANA_ADMIN_USER", default="admin")
     if not USER_RE.fullmatch(admin_user):
         _fail("OBS_GRAFANA_ADMIN_USER must be a simple username")
-    admin_password = env.get("OBS_GRAFANA_ADMIN_PASSWORD", "")
+    # Site default password; override via OBS_GRAFANA_ADMIN_PASSWORD when the
+    # stack is reachable beyond a trusted single-operator network.
+    admin_password = env.get("OBS_GRAFANA_ADMIN_PASSWORD", "123456")
     if any(ord(char) < 0x20 or ord(char) == 0x7f for char in admin_password):
         _fail("OBS_GRAFANA_ADMIN_PASSWORD contains a control character")
     containers = {key: _safe_component_name(str(value["container"])) for key, value in profile["components"].items()}
@@ -593,7 +597,7 @@ def render_grafana_dashboard() -> str:
             {"id": 5, "type": "timeseries", "title": "Fabric exporter health", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
              "targets": [{"expr": "up{job=\"fabric\"}", "refId": "A"}]},
             {"id": 6, "type": "timeseries", "title": "vLLM KV cache usage", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
-             "targets": [{"expr": "vllm:gpu_cache_usage_perc", "refId": "A"}]},
+             "targets": [{"expr": "vllm:kv_cache_usage_perc", "refId": "A"}]},
             {"id": 7, "type": "timeseries", "title": "vLLM waiting requests", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
              "targets": [{"expr": "vllm:num_requests_waiting", "refId": "A"}]},
             {"id": 8, "type": "timeseries", "title": "vLLM preemptions", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
@@ -604,6 +608,20 @@ def render_grafana_dashboard() -> str:
              "targets": [{"expr": "dgx_fabric_link_up", "refId": "A"}]},
             {"id": 11, "type": "logs", "title": "NCCL/RoCE errors", "gridPos": {"h": 8, "w": 24, "x": 0, "y": 40},
              "targets": [{"expr": "{job=\"vllm\"} |~ \"(?i)NCCL|RoCE|RDMA|timeout|preempt\"", "refId": "A", "datasource": {"type": "loki", "uid": "dgx-loki"}}]},
+            {"id": 12, "type": "timeseries", "title": "External KV cache hit rate (LMCache)", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 48},
+             "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1, "min": 0}, "overrides": []},
+             "targets": [{"expr": "sum(rate(vllm:external_prefix_cache_hits_total[5m])) / sum(rate(vllm:external_prefix_cache_queries_total[5m]))", "refId": "A", "legendFormat": "external hit rate"}]},
+            {"id": 13, "type": "timeseries", "title": "Local prefix cache hit rate", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 48},
+             "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1, "min": 0}, "overrides": []},
+             "targets": [{"expr": "sum(rate(vllm:prefix_cache_hits_total[5m])) / sum(rate(vllm:prefix_cache_queries_total[5m]))", "refId": "A", "legendFormat": "local hit rate"}]},
+            {"id": 14, "type": "timeseries", "title": "Token throughput (input/output)", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 56},
+             "fieldConfig": {"defaults": {"unit": "tps"}, "overrides": []},
+             "targets": [{"expr": "sum(rate(vllm:prompt_tokens_total[5m]))", "refId": "A", "legendFormat": "input tokens/s"},
+                          {"expr": "sum(rate(vllm:generation_tokens_total[5m]))", "refId": "B", "legendFormat": "output tokens/s"}]},
+            {"id": 15, "type": "timeseries", "title": "Prompt tokens by source (cache-hit input)", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 56},
+             "fieldConfig": {"defaults": {"unit": "tps"}, "overrides": []},
+             "targets": [{"expr": "sum by (source) (rate(vllm:prompt_tokens_by_source_total[5m]))", "refId": "A", "legendFormat": "{{source}}"},
+                          {"expr": "sum(rate(vllm:external_prefix_cache_hits_total[5m]))", "refId": "B", "legendFormat": "external hit input tokens/s"}]},
         ],
         "templating": {"list": []}, "annotations": {"list": []},
     }
@@ -821,12 +839,11 @@ def _remote_script(config: Mapping[str, Any], role: str, action: str, *, purge: 
         lines.append(" ".join(parts) + " >/dev/null")
 
     rootq = '"$ROOT"'
-    role_bind = config["head_host"] if role == "head" else config["worker_host"]
     log_mount = '--mount type=bind,src="$VLLM_LOG_PATH",dst=/var/log/vllm.log,readonly'
     if role == "head":
         run(containers["loki"], "loki", "-config.file=/etc/loki/loki.yml",
             mounts=f"--mount type=bind,src={rootq}/config/loki/loki.yml,dst=/etc/loki/loki.yml,readonly --mount type=volume,src={_quote(volumes['loki'])},dst=/loki",
-            portspec=f"--publish {_quote(str(config['head_host']) + ':' + str(config['ports']['loki']) + ':3100')}")
+            portspec=f"--publish {_quote(str(config['bind_addr']) + ':' + str(config['ports']['loki']) + ':3100')}")
         run(containers["alertmanager"], "alertmanager", "--config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager",
             f"--mount type=bind,src={rootq}/config/alertmanager/alertmanager.yml,dst=/etc/alertmanager/alertmanager.yml,readonly --mount type=volume,src={_quote(volumes['alertmanager'])},dst=/alertmanager",
             f"--publish {_quote(str(config['bind_addr']) + ':' + str(config['ports']['alertmanager']) + ':9093')}")
@@ -849,11 +866,11 @@ def _remote_script(config: Mapping[str, Any], role: str, action: str, *, purge: 
             "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)",
         )),
         mounts="--mount type=bind,src=/,dst=/host,readonly,bind-propagation=rslave",
-        portspec=f"--publish {_quote(str(role_bind) + ':' + str(config['ports']['node_exporter']) + ':9100')}")
+        portspec=f"--publish {_quote(str(config['bind_addr']) + ':' + str(config['ports']['node_exporter']) + ':9100')}")
     fabric_key = "fabric_exporter_head" if role == "head" else "fabric_exporter_worker"
     run(containers[fabric_key], "fabric_exporter", "python3 /opt/fabric_exporter.py",
         mounts=f"--mount type=bind,src={rootq}/config/fabric/fabric_exporter.py,dst=/opt/fabric_exporter.py,readonly --mount type=bind,src=/sys,dst=/host/sys,readonly",
-        portspec=f"--publish {_quote(str(role_bind) + ':' + str(config['ports']['fabric_exporter']) + ':9100')}",
+        portspec=f"--publish {_quote(str(config['bind_addr']) + ':' + str(config['ports']['fabric_exporter']) + ':9100')}",
         envspec=" ".join(
             _quote(f"--env={key}={value}")
             for key, value in (
