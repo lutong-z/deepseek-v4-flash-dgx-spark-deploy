@@ -20,7 +20,9 @@
       "prometheus": 19090,
       "alertmanager": 19093,
       "node_exporter": 19100,
-      "fabric_exporter": 19110
+      "fabric_exporter": 19110,
+      "lmcache_lifecycle": 19120,
+      "lmcache_server": 19121
     }
   },
   "components": {

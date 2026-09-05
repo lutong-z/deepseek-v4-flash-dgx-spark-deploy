@@ -74,12 +74,16 @@ class ObservabilityStackTests(unittest.TestCase):
         self.assertIn('metrics_path: "/metrics"', prometheus)
         self.assertIn('"192.168.100.10:19100"', prometheus)
         self.assertIn('"192.168.100.11:19110"', prometheus)
+        self.assertIn('"192.168.100.10:19120"', prometheus)
+        self.assertIn('"192.168.100.11:19121"', prometheus)
         rules = stack.render_rules()
         for alert in ("VLLMMetricsDown", "NodeExporterDown", "FabricExporterDown"):
             self.assertIn(f"alert: {alert}", rules)
         dashboard = json.loads(stack.render_grafana_dashboard())
         self.assertEqual(dashboard["uid"], "dgx-spark-overview")
         self.assertTrue(any(panel["title"] == "vLLM requests running" for panel in dashboard["panels"]))
+        self.assertTrue(any(panel["title"] == "Prefix cache expiry" for panel in dashboard["panels"]))
+        self.assertTrue(any(panel["title"] == "LMCache L2 footprint" for panel in dashboard["panels"]))
 
     def test_image_loader_rejects_mutable_or_wrong_architecture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

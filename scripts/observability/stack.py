@@ -183,6 +183,7 @@ def load_profile(path: Path) -> dict[str, Any]:
     expected_ports = {
         "grafana": 13000, "loki": 13100, "prometheus": 19090,
         "alertmanager": 19093, "node_exporter": 19100, "fabric_exporter": 19110,
+        "lmcache_lifecycle": 19120, "lmcache_server": 19121,
     }
     if network.get("ports") != expected_ports:
         _fail(f"profile ports must exactly be {expected_ports}")
@@ -396,6 +397,20 @@ scrape_configs:
           - {_yaml_scalar(f'{worker}:{ports["fabric_exporter"]}')}
         labels:
           service: fabric-exporter
+  - job_name: lmcache-lifecycle
+    static_configs:
+      - targets:
+          - {_yaml_scalar(f'{head}:{ports["lmcache_lifecycle"]}')}
+          - {_yaml_scalar(f'{worker}:{ports["lmcache_lifecycle"]}')}
+        labels:
+          service: lmcache-lifecycle
+  - job_name: lmcache-server
+    static_configs:
+      - targets:
+          - {_yaml_scalar(f'{head}:{ports["lmcache_server"]}')}
+          - {_yaml_scalar(f'{worker}:{ports["lmcache_server"]}')}
+        labels:
+          service: lmcache-server
   - job_name: prometheus
     static_configs:
       - targets: [\"prometheus:9090\"]
@@ -622,6 +637,13 @@ def render_grafana_dashboard() -> str:
              "fieldConfig": {"defaults": {"unit": "tps"}, "overrides": []},
              "targets": [{"expr": "sum by (source) (rate(vllm:prompt_tokens_by_source_total[5m]))", "refId": "A", "legendFormat": "{{source}}"},
                           {"expr": "sum(rate(vllm:external_prefix_cache_hits_total[5m]))", "refId": "B", "legendFormat": "external hit input tokens/s"}]},
+            {"id": 16, "type": "timeseries", "title": "Prefix cache expiry", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 64},
+             "targets": [{"expr": "sum(rate(vllm:prefix_cache_expired_blocks_total[5m]))", "refId": "A", "legendFormat": "GPU blocks/s"},
+                         {"expr": "sum(rate(dgx_lmcache_l2_expired_entries_total[5m]))", "refId": "B", "legendFormat": "L2 objects/s"}]},
+            {"id": 17, "type": "timeseries", "title": "LMCache L2 footprint", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 64},
+             "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+             "targets": [{"expr": "dgx_lmcache_l2_bytes", "refId": "A", "legendFormat": "{{instance}}"},
+                         {"expr": "rate(dgx_lmcache_l2_capacity_evicted_bytes_total[5m])", "refId": "B", "legendFormat": "evicted bytes/s"}]},
         ],
         "templating": {"list": []}, "annotations": {"list": []},
     }

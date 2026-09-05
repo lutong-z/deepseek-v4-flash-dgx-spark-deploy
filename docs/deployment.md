@@ -46,6 +46,38 @@ GPU utilization `0.85`; `instanttensor`; b12x linear/MoE; reasoning defaults;
 and CUDA Graph capture `64` with `custom_ops=["all"]`. The reviewed model path
 is `/models/DeepSeek-V4-Flash-0731` on a read-only mount.
 
+
+## Layered prefix-cache lifecycle
+
+The production cache design uses independent, pressure-safe tiers:
+
+- local GPU prefix-cache blocks have a 300-second idle TTL configured with
+  `--prefix-cache-idle-timeout-seconds 300`; this is an upper bound, not a pin,
+  because allocator pressure may evict free cached blocks sooner;
+- LMCache L1 is a 1 GiB transient transfer tier. Completed stores are removed
+  after reaching L2, restores are released after the waiting request consumes
+  them, and LRU pressure may reclaim them earlier; and
+- each TP rank writes to its own persistent filesystem L2 root, bounded to
+  100 GiB with a 7,200-second idle TTL and an 83 percent high-water trim target.
+
+Run `python3 -m dgx_deploy.lmcache_lifecycle` beside each LMCache server to
+enforce L2 TTL and size limits. Files are published by atomic rename, `.tmp`
+is excluded from live scans, and a root ownership marker prevents cleanup
+outside the dedicated cache directory. Run the LMCache server through
+`python3 -m dgx_deploy.lmcache_server` so successful lookups refresh object
+access time and the lifecycle process implements LRU rather than FIFO.
+
+Prometheus scrapes lifecycle metrics on port `19120`, LMCache metrics on
+`19121`, and vLLM reports local expiry through
+`vllm:prefix_cache_expired_blocks_total`. Stop the complete TP service before
+creating or replacing either cache server. A server restarted under a live
+engine has a new GPU context while the connector retains stale state and can
+wait indefinitely.
+
+`session_id` is request metadata; it does not reserve or pin prefix-cache
+blocks. Cache identity remains token-hash based, so concurrent sessions reuse
+an identical prefix without a session-specific cache key.
+
 Exact image IDs, immutable references, source labels, model hash, and service
 contract hash come from the complete external lock. No value is inferred from
 logs or local state.

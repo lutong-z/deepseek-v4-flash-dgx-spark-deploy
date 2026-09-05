@@ -33,14 +33,16 @@
         "ports": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["grafana", "loki", "prometheus", "alertmanager", "node_exporter", "fabric_exporter"],
+          "required": ["grafana", "loki", "prometheus", "alertmanager", "node_exporter", "fabric_exporter", "lmcache_lifecycle", "lmcache_server"],
           "properties": {
             "grafana": {"const": 13000},
             "loki": {"const": 13100},
             "prometheus": {"const": 19090},
             "alertmanager": {"const": 19093},
             "node_exporter": {"const": 19100},
-            "fabric_exporter": {"const": 19110}
+            "fabric_exporter": {"const": 19110},
+            "lmcache_lifecycle": {"const": 19120},
+            "lmcache_server": {"const": 19121}
           }
         }
       }
