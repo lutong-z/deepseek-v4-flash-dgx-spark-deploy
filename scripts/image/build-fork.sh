@@ -22,6 +22,7 @@ LOCK_FILE="$DEPLOY_ROOT/image.fork.lock.json"
 WORK_DIR=""
 DRY_RUN=false
 PROXY=""
+BUILD_JOBS=""
 IMAGE_TAG="vllm-node-b12x:production-20260907"
 FINAL_TAG="production/dsv4-native432-fork:production-20260907"
 PROFILE_SHA256=""
@@ -59,6 +60,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --work-dir) WORK_DIR="$2"; shift 2 ;;
+    --build-jobs) BUILD_JOBS="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     --proxy) PROXY="$2"; shift 2 ;;
     --image-tag) IMAGE_TAG="$2"; shift 2 ;;
@@ -208,16 +210,21 @@ done
 step vllm "build vllm+b12x base image $IMAGE_TAG (multi-hour)"
 NETWORK_ARGS=()
 if [[ -n "$PROXY" ]]; then NETWORK_ARGS=(--network host); fi
+JOB_ARGS=()
+if [[ -n "$BUILD_JOBS" ]]; then JOB_ARGS=(--build-jobs "$BUILD_JOBS"); fi
 if $DRY_RUN; then
-  printf 'DRY-RUN (cd %s && %s -t %s %s)\n' "$WORK_DIR/spark-vllm-docker" "$BUILD_COMMAND" "$IMAGE_TAG" "${NETWORK_ARGS[*]:-}"
+  printf 'DRY-RUN (cd %s && %s -t %s %s %s)\n' "$WORK_DIR/spark-vllm-docker" "$BUILD_COMMAND" "$IMAGE_TAG" "${NETWORK_ARGS[*]:-}" "${JOB_ARGS[*]:-}"
 else
-  if [[ ${#NETWORK_ARGS[@]} -gt 0 ]]; then
+  if [[ ${#NETWORK_ARGS[@]} -gt 0 && ${#JOB_ARGS[@]} -gt 0 ]]; then
+    (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG" "${NETWORK_ARGS[@]}" "${JOB_ARGS[@]}")
+  elif [[ ${#NETWORK_ARGS[@]} -gt 0 ]]; then
     (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG" "${NETWORK_ARGS[@]}")
+  elif [[ ${#JOB_ARGS[@]} -gt 0 ]]; then
+    (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG" "${JOB_ARGS[@]}")
   else
     (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG")
   fi
 fi
-
 # --- stage 4: lmcache fork wheel --------------------------------------------
 step lmcache "build lmcache fork wheel inside the base image"
 if $DRY_RUN; then
