@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "profile_id": "dsv4-native432-b12x-tp2-seq10",
+  "release_gated_manifest_fields": [
+    "chat_template",
+    "reasoning_config",
+    "load_format",
+    "linear_backend",
+    "cuda_graph_capture_sizes",
+    "compact_block_stride"
+  ],
+  "platform": {
+    "architecture": "linux/arm64",
+    "accelerator": "GB10",
+    "nodes": 2
+  },
+  "topology": {
+    "tensor_parallel_size": 2,
+    "pipeline_parallel_size": 1,
+    "nnodes": 2,
+    "head_rank": 0,
+    "worker_rank": 1,
+    "worker_first": true
+  },
+  "model": {
+    "family": "DeepSeek-V4-Flash",
+    "served_model_name": "deepseek-v4-flash-0731-native432",
+    "container_path": "/models",
+    "model_path": "/models/DeepSeek-V4-Flash-0731"
+  },
+  "service": {
+    "attention_backend": "B12X_MLA_SPARSE",
+    "moe_backend": "b12x",
+    "linear_backend": "b12x",
+    "distributed_executor_backend": "mp",
+    "target_kv_cache_dtype": "nvfp4_ds_mla",
+    "block_size": 256,
+    "gpu_memory_utilization": 0.85,
+    "enable_chunked_prefill": true,
+    "long_prefill_token_threshold": 0,
+    "compact_layout": {
+      "abi": "dsv4-native432-compact-v1",
+      "record_bytes": 432
+    },
+    "draft_config_json": "{\"method\":\"dspark\",\"num_speculative_tokens\":5,\"draft_sample_method\":\"probabilistic\",\"attention_backend\":\"B12X_MLA_SPARSE\",\"kv_cache_dtype\":\"fp8\"}",
+    "reasoning_config_json": "{\"reasoning_parser\":\"deepseek_v4\",\"reasoning_start_str\":\"\",\"reasoning_end_str\":\"\"}",
+    "load_format": "instanttensor",
+    "prefix_caching": {
+      "enabled": true,
+      "hash_algorithm": "sha256"
+    },
+    "async_scheduling": false,
+    "cuda_graph": {
+      "enabled": true,
+      "mode": "FULL_AND_PIECEWISE"
+    },
+    "max_cudagraph_capture_size": 64,
+    "compilation_config_json": "{\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"custom_ops\":[\"all\"]}"
+  },
+  "limits": {
+    "max_model_len": 327680,
+    "max_num_seqs": 10,
+    "max_num_batched_tokens": 8192
+  },
+  "parsing": {
+    "tokenizer_mode": "deepseek_v4",
+    "tool_call_parser": "deepseek_v4",
+    "reasoning_parser": "deepseek_v4"
+  },
+  "container": {
+    "name_prefix": "dsv4-candidate-",
+    "read_only_root": true,
+    "no_new_privileges": true
+  },
+  "image": {
+    "lock_path": "image.lock.json",
+    "candidate_id": "dsv4-0731-native432-b12x-seq10",
+    "source_refs": {
+      "vllm": "release/dsv4-0731-native432-b12x",
+      "b12x": "release/dsv4-0731-native432"
+    },
+    "required_labels": [
+      "org.opencontainers.image.revision",
+      "com.dgx-spark.architecture",
+      "com.dgx-spark.profile_sha256",
+      "com.dgx-spark.service_contract_sha256",
+      "com.dgx-spark.image_lock_sha256",
+      "com.dgx-spark.vllm.commit",
+      "com.dgx-spark.b12x.commit"
+    ]
+  },
+  "security": {
+    "production_change_allowed": false,
+    "api_bind_default": "127.0.0.1",
+    "model_mount_read_only": true
+  }
+}

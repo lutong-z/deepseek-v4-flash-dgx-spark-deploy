@@ -2,21 +2,25 @@ from __future__ import annotations
 
 import json
 import unittest
-from pathlib import Path
+from collections.abc import Sequence
 
 from dgx_deploy.config import DEFAULT_PROFILE, ConfigError, load_config
-from dgx_deploy.lifecycle import DeploymentEngine
+from dgx_deploy.lifecycle import DeploymentEngine, LifecycleError
 from dgx_deploy.remote import CommandResult
 from dgx_deploy.fabric import (
     FabricError,
+    FabricNotReady,
     apply_commands,
     fabric_spec,
     gid_attribute_commands,
+    gid_discovery_command,
+    nm_connection_state_command,
     parse_address_output,
     parse_gid_attributes,
     parse_gid_discovery_output,
     parse_gid_output,
     parse_link_output,
+    parse_nm_connection_state,
 )
 from dgx_deploy.render import render_environment, render_plan
 from test_config import valid_env, write_env
@@ -54,6 +58,33 @@ class FabricTests(unittest.TestCase):
             return load_config(path, DEFAULT_PROFILE)
         finally:
             path.unlink()
+    def _f1_lock(self, config: dict[str, object]) -> dict[str, object]:
+        labels = {
+            "org.opencontainers.image.revision": "a" * 40,
+            "com.dgx-spark.architecture": "linux/arm64",
+            "com.dgx-spark.profile_sha256": "b" * 64,
+            "com.dgx-spark.service_contract_sha256": "c" * 64,
+            "com.dgx-spark.image_lock_sha256": "d" * 64,
+            "com.dgx-spark.vllm.commit": "e" * 40,
+            "com.dgx-spark.b12x.commit": "f" * 40,
+            "com.dgx-spark.runtime-file-sha256": "7" * 64,
+        }
+        deployment = config["deployment"]
+        return {
+            "images": {
+                "worker": {
+                    "reference": deployment["worker_image_ref"],
+                    "image_id": "sha256:" + "1" * 64,
+                    "labels": labels,
+                },
+                "head": {
+                    "reference": deployment["head_image_ref"],
+                    "image_id": "sha256:" + "2" * 64,
+                    "labels": labels,
+                },
+            }
+        }
+
 
     def test_f1_spec_and_nm_commands_are_primary_only(self) -> None:
         config = self._f1_config()
@@ -111,6 +142,70 @@ class FabricTests(unittest.TestCase):
         with self.assertRaises(FabricError):
             parse_gid_attributes("enp1s0f0np0\n", "RoCE v2\n", fabric_spec(config, "worker"))
 
+    def test_nm_connection_state_is_exact_and_rejects_ambiguity(self) -> None:
+        config = self._f1_config()
+        spec = fabric_spec(config, "head")
+        self.assertEqual(
+            nm_connection_state_command(config, "head"),
+            ["nmcli", "-t", "-f", "NAME,UUID,DEVICE,ACTIVE", "connection", "show"],
+        )
+        state = parse_nm_connection_state(
+            "f1-head:head-uuid:enp1s0f1np1:yes\nf1-candidate-head:candidate-uuid::no\n",
+            spec,
+        )
+        self.assertTrue(state["target_existed"])
+        self.assertEqual(state["target_uuid"], "head-uuid")
+        self.assertEqual(state["active_connection"], "f1-head")
+        with self.assertRaises(FabricError):
+            parse_nm_connection_state(
+                "f1-head:head-uuid:enp1s0f1np1:yes\nf1-head:other-uuid::no\n",
+                spec,
+            )
+
+    def test_auto_gid_discovery_requires_ipv4_mapped_rocev2(self) -> None:
+        config = self._f1_config()
+        command = gid_discovery_command(config, "worker", "registry.example.invalid/worker@sha256:" + "d" * 64)
+        script = " ".join(command)
+        self.assertIn('test "$ndev" = "enp1s0f1np1"', script)
+        self.assertIn('test "$typ" = "RoCE v2"', script)
+        self.assertIn("0000:0000:0000:0000:0000:ffff:", script)
+
+
+    def test_gid_readiness_retries_all_zero_after_network_activation(self) -> None:
+        config = self._f1_config()
+        deployment = dict(config["deployment"])
+        deployment["head_roce_gid_index"] = 3
+        config = dict(config)
+        config["deployment"] = deployment
+        engine = DeploymentEngine(config, self._f1_lock(config), runner=lambda role, command: CommandResult(tuple(command), 0, "", ""))
+        outputs = [
+            "0000:0000:0000:0000:0000:0000:0000:0000\n",
+            "0000:0000:0000:0000:0000:0000:0000:0000\n",
+            "fe80:0000:0000:0000:0000:0000:0000:0003\n",
+        ]
+        calls: list[tuple[str, ...]] = []
+        engine._remote = lambda role, command: calls.append(tuple(command)) or CommandResult(tuple(command), 0, outputs.pop(0), "")
+        engine.sleep = lambda seconds: None
+        result = engine._read_gid_with_retry("head", ["docker", "run", "/bin/cat"], fabric_spec(config, "head"), discovery=False)
+        self.assertEqual(result[0], 3)
+        self.assertEqual(len(calls), 3)
+
+    def test_gid_readiness_exhaustion_is_bounded(self) -> None:
+        config = self._f1_config()
+        deployment = dict(config["deployment"])
+        deployment["head_roce_gid_index"] = 3
+        config = dict(config)
+        config["deployment"] = deployment
+        engine = DeploymentEngine(config, self._f1_lock(config), runner=lambda role, command: CommandResult(tuple(command), 0, "", ""))
+        engine._remote = lambda role, command: CommandResult(tuple(command), 0, "0000:0000:0000:0000:0000:0000:0000:0000\n", "")
+        sleeps: list[float] = []
+        engine.sleep = lambda seconds: sleeps.append(seconds)
+        with self.assertRaisesRegex(LifecycleError, "12 attempts"):
+            engine._read_gid_with_retry("head", ["docker", "run", "/bin/cat"], fabric_spec(config, "head"), discovery=False)
+        self.assertEqual(len(sleeps), 11)
+
+
+
     def test_f1_plan_exposes_only_f1_fabric_commands(self) -> None:
         config = self._f1_config()
         plan = render_plan(config)
@@ -126,6 +221,152 @@ class FabricTests(unittest.TestCase):
             ["preflight", "capture-rollback", "fabric-apply-networkmanager", "fabric-discover", "fabric-verify", "preflight"],
         )
 
+
+    def test_candidate_fabric_rollback_removes_new_profiles_and_restores_prior(self) -> None:
+        config = self._f1_config()
+        deployment = dict(config["deployment"])
+        deployment.update(
+            {
+                "mode": "candidate",
+                "master_port": 29621,
+                "api_port": 18101,
+                "head_fabric_connection": "f1-candidate-head",
+                "worker_fabric_connection": "f1-candidate-worker",
+                "head_image_ref": "sha256:" + "2" * 64,
+                "worker_image_ref": "sha256:" + "1" * 64,
+                "allow_production_images_in_candidate": True,
+            }
+        )
+        config = dict(config)
+        config["deployment"] = deployment
+        engine = DeploymentEngine(config, self._f1_lock(config), runner=lambda role, command: CommandResult(tuple(command), 0, "", ""))
+        profiles = {
+            "head": {
+                "f1-head": {"uuid": "head-prior", "device": "enp1s0f1np1", "active": True},
+            },
+            "worker": {
+                "f1-worker": {"uuid": "worker-prior", "device": "enp1s0f1np1", "active": True},
+            },
+        }
+
+        def state_output(role: str) -> str:
+            return "".join(
+                f"{name}:{value['uuid']}:{value['device']}:{'yes' if value['active'] else 'no'}\n"
+                for name, value in profiles[role].items()
+            )
+
+        events: list[tuple[str, str, str]] = []
+
+        def runner(role: str, command: Sequence[str]) -> CommandResult:
+            argv = tuple(command)
+            if argv == tuple(nm_connection_state_command(config, role)):
+                return CommandResult(argv, 0, state_output(role), "")
+            if len(argv) >= 3 and argv[-3:-1] == ("connection", "down"):
+                target = argv[-1]
+                profiles[role][target]["active"] = False
+                profiles[role][target]["device"] = ""
+                events.append((role, "down", target))
+            elif len(argv) >= 3 and argv[-3:-1] == ("connection", "delete"):
+                target = argv[-1]
+                profiles[role].pop(target, None)
+                events.append((role, "delete", target))
+            elif len(argv) >= 3 and argv[-3:-1] == ("connection", "up"):
+                target = argv[-1]
+                profiles[role][target]["active"] = True
+                profiles[role][target]["device"] = "enp1s0f1np1"
+                events.append((role, "up", target))
+            return CommandResult(argv, 0, "", "")
+
+        engine._remote = runner
+        fabric_state = engine._capture_fabric_state()
+        for role in ("worker", "head"):
+            prior = "f1-" + role
+            profiles[role][prior]["active"] = False
+            profiles[role][prior]["device"] = ""
+            candidate = "f1-candidate-" + role
+            profiles[role][candidate] = {
+                "uuid": role + "-new",
+                "device": "enp1s0f1np1",
+                "active": True,
+            }
+        events.clear()
+        engine._restore_fabric_state(fabric_state)
+        self.assertEqual(
+            events,
+            [
+                ("worker", "down", "f1-candidate-worker"),
+                ("worker", "delete", "f1-candidate-worker"),
+                ("worker", "up", "f1-worker"),
+                ("head", "down", "f1-candidate-head"),
+                ("head", "delete", "f1-candidate-head"),
+                ("head", "up", "f1-head"),
+            ],
+        )
+        self.assertEqual(set(profiles["worker"]), {"f1-worker"})
+        self.assertEqual(set(profiles["head"]), {"f1-head"})
+
+    def test_fabric_rollback_tolerates_already_inactive_profile(self) -> None:
+        config = self._f1_config()
+        engine = DeploymentEngine(config, self._f1_lock(config), runner=lambda role, command: CommandResult(tuple(command), 0, "", ""))
+        profiles = {
+            role: {
+                f"prior-{role}": {"uuid": f"{role}-prior", "device": "enp1s0f1np1", "active": True},
+            }
+            for role in ("worker", "head")
+        }
+
+        def state_output(role: str) -> str:
+            return "".join(
+                f"{name}:{value['uuid']}:{value['device']}:{'yes' if value['active'] else 'no'}\n"
+                for name, value in profiles[role].items()
+            )
+
+        events: list[tuple[str, str, str]] = []
+
+        def runner(role: str, command: Sequence[str]) -> CommandResult:
+            argv = tuple(command)
+            if argv == tuple(nm_connection_state_command(config, role)):
+                return CommandResult(argv, 0, state_output(role), "")
+            if len(argv) >= 3 and argv[-3:-1] == ("connection", "down"):
+                target = argv[-1]
+                profiles[role][target]["active"] = False
+                profiles[role][target]["device"] = ""
+                events.append((role, "down", target))
+                raise LifecycleError(f"{role} command failed: '{target}' is not an active connection")
+            if len(argv) >= 3 and argv[-3:-1] == ("connection", "delete"):
+                target = argv[-1]
+                profiles[role].pop(target, None)
+                events.append((role, "delete", target))
+            elif len(argv) >= 3 and argv[-3:-1] == ("connection", "up"):
+                target = argv[-1]
+                profiles[role][target]["active"] = True
+                profiles[role][target]["device"] = "enp1s0f1np1"
+                events.append((role, "up", target))
+            return CommandResult(argv, 0, "", "")
+
+        engine._remote = runner
+        fabric_state = engine._capture_fabric_state()
+        for role in ("worker", "head"):
+            prior = f"prior-{role}"
+            profiles[role][prior]["active"] = False
+            profiles[role][prior]["device"] = ""
+            target = str(config["deployment"][f"{role}_fabric_connection"])
+            profiles[role][target] = {"uuid": f"{role}-target", "device": "enp1s0f1np1", "active": True}
+        engine._restore_fabric_state(fabric_state)
+        self.assertEqual(
+            events,
+            [
+                ("worker", "down", "f1-worker"),
+                ("worker", "delete", "f1-worker"),
+                ("worker", "up", "prior-worker"),
+                ("head", "down", "f1-head"),
+                ("head", "delete", "f1-head"),
+                ("head", "up", "prior-head"),
+            ],
+        )
+        self.assertEqual(set(profiles["worker"]), {"prior-worker"})
+        self.assertEqual(set(profiles["head"]), {"prior-head"})
+
     def test_f1_apply_networks_both_roles_before_peer_readback(self) -> None:
         config = self._f1_config()
         labels = {
@@ -136,6 +377,7 @@ class FabricTests(unittest.TestCase):
             "com.dgx-spark.image_lock_sha256": "d" * 64,
             "com.dgx-spark.vllm.commit": "e" * 40,
             "com.dgx-spark.b12x.commit": "f" * 40,
+            "com.dgx-spark.runtime-file-sha256": "7" * 64,
         }
         lock = {
             "images": {
@@ -179,7 +421,9 @@ class FabricTests(unittest.TestCase):
             spec,
         )
         parse_gid_output("fe80:0000:0000:0000:0000:0000:0000:0001\n", {"role": "head"})
-        self.assertEqual(parse_gid_discovery_output("4=fe80:0000:0000:0000:0000:0000:0000:0001\n"), (4, "fe80:0000:0000:0000:0000:0000:0000:0001"))
+        self.assertEqual(parse_gid_discovery_output("4=0000:0000:0000:0000:0000:ffff:c0a8:640a\n"), (4, "0000:0000:0000:0000:0000:ffff:c0a8:640a"))
+        with self.assertRaises(FabricNotReady):
+            parse_gid_discovery_output("4=fe80:0000:0000:0000:0000:0000:0000:0001\n")
         with self.assertRaises(FabricError):
             parse_link_output(
                 json.dumps([{"ifname": "enp1s0f1np1", "mtu": 1500, "operstate": "UP", "flags": ["LOWER_UP"]}]),

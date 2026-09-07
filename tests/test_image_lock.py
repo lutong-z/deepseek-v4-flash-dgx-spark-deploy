@@ -95,13 +95,14 @@ class ImageLockTests(unittest.TestCase):
 
     def test_containerfile_wires_only_reviewed_provenance_labels(self) -> None:
         containerfile = (ROOT / "container" / "Containerfile").read_text(encoding="utf-8")
-        for argument in ("IMAGE_LOCK_SHA256", "SOURCE_REVISION", "VLLM_COMMIT", "B12X_COMMIT"):
+        for argument in ("IMAGE_LOCK_SHA256", "SOURCE_REVISION", "VLLM_COMMIT", "B12X_COMMIT", "RUNTIME_FILE_SHA256"):
             self.assertIn(f"ARG {argument}", containerfile)
         for label in (
             "org.opencontainers.image.revision",
             "com.dgx-spark.image_lock_sha256",
             "com.dgx-spark.vllm.commit",
             "com.dgx-spark.b12x.commit",
+            "com.dgx-spark.runtime-file-sha256",
         ):
             self.assertIn(f"LABEL {label}", containerfile)
 

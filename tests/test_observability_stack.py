@@ -68,7 +68,15 @@ class ObservabilityStackTests(unittest.TestCase):
 
     def test_renderer_scrapes_production_metrics_and_declares_ports(self) -> None:
         profile = stack.load_profile(PROFILE)
-        config = stack._config({}, profile, {key: f"docker.io/example/{key}@sha256:{DIGEST}" for key in stack.DEFAULT_IMAGE_TAGS}, require_remote=False)
+        config = stack._config(
+            {},
+            profile,
+            {
+                key: f"docker.io/example/{key}@sha256:{DIGEST}"
+                for key in stack.DEFAULT_IMAGE_TAGS
+            },
+            require_remote=False,
+        )
         prometheus = stack.render_prometheus(config)
         self.assertIn('targets: ["192.168.100.10:8101"]', prometheus)
         self.assertIn('metrics_path: "/metrics"', prometheus)
@@ -81,9 +89,49 @@ class ObservabilityStackTests(unittest.TestCase):
             self.assertIn(f"alert: {alert}", rules)
         dashboard = json.loads(stack.render_grafana_dashboard())
         self.assertEqual(dashboard["uid"], "dgx-spark-overview")
-        self.assertTrue(any(panel["title"] == "vLLM requests running" for panel in dashboard["panels"]))
-        self.assertTrue(any(panel["title"] == "Prefix cache expiry" for panel in dashboard["panels"]))
-        self.assertTrue(any(panel["title"] == "LMCache L2 footprint" for panel in dashboard["panels"]))
+        self.assertTrue(
+            any(
+                panel["title"] == "vLLM requests running"
+                for panel in dashboard["panels"]
+            )
+        )
+        self.assertTrue(
+            any(
+                panel["title"] == "Prefix cache expiry" for panel in dashboard["panels"]
+            )
+        )
+        self.assertTrue(
+            any(
+                panel["title"] == "LMCache L2 footprint"
+                for panel in dashboard["panels"]
+            )
+        )
+
+    def test_dashboard_exposes_selected_range_token_totals(self) -> None:
+        dashboard = json.loads(stack.render_grafana_dashboard())
+        panel = next(
+            panel
+            for panel in dashboard["panels"]
+            if panel["title"] == "Token totals (selected range)"
+        )
+
+        self.assertEqual(panel["type"], "stat")
+        targets = {
+            target["legendFormat"]: target
+            for target in panel["targets"]
+        }
+        expected_metrics = {
+            "input": "vllm:prompt_tokens_total",
+            "output": "vllm:generation_tokens_total",
+            "cache hit": "vllm:prompt_tokens_cached_total",
+        }
+        self.assertEqual(set(targets), set(expected_metrics))
+        for legend, metric in expected_metrics.items():
+            self.assertEqual(
+                targets[legend]["expr"],
+                f"sum(increase({metric}[$__range])) or vector(0)",
+            )
+            self.assertIs(targets[legend]["instant"], True)
 
     def test_image_loader_rejects_mutable_or_wrong_architecture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -106,8 +154,23 @@ class ObservabilityStackTests(unittest.TestCase):
             lock = root / "obs.lock.json"
             env_file(env, password="dry-" + "run-" + "secret")
             lock.write_text(json.dumps(lock_document()), encoding="utf-8")
-            with patch.object(stack.subprocess, "run", side_effect=AssertionError("dry-run spawned process")):
-                result = stack.main(["deploy", "--env-file", str(env), "--image-lock", str(lock), "--confirm", "DGX-OBSERVABILITY", "--dry-run"])
+            with patch.object(
+                stack.subprocess,
+                "run",
+                side_effect=AssertionError("dry-run spawned process"),
+            ):
+                result = stack.main(
+                    [
+                        "deploy",
+                        "--env-file",
+                        str(env),
+                        "--image-lock",
+                        str(lock),
+                        "--confirm",
+                        "DGX-OBSERVABILITY",
+                        "--dry-run",
+                    ]
+                )
             self.assertEqual(result, 0)
 
     def test_down_script_is_label_scoped_and_keeps_volumes_by_default(self) -> None:
@@ -126,7 +189,6 @@ class ObservabilityStackTests(unittest.TestCase):
         self.assertNotIn("seq10", script.lower())
         self.assertNotIn("vllm", script.lower())
 
-
     def test_up_script_scopes_vllm_logs_and_runs_custom_fabric_exporter(self) -> None:
         profile = stack.load_profile(PROFILE)
         config = stack._config(
@@ -135,14 +197,19 @@ class ObservabilityStackTests(unittest.TestCase):
                 "OBS_REMOTE_ROOT": "/var/lib/dgx-spark/observability",
             },
             profile,
-            {key: f"docker.io/example/{key}@sha256:{DIGEST}" for key in stack.DEFAULT_IMAGE_TAGS},
+            {
+                key: f"docker.io/example/{key}@sha256:{DIGEST}"
+                for key in stack.DEFAULT_IMAGE_TAGS
+            },
         )
         script = stack._remote_script(config, "head", "up")
         self.assertIn("docker inspect -f", script)
         self.assertIn("VLLM_LOG_PATH", script)
         self.assertIn("dst=/var/log/vllm.log", script)
         self.assertNotIn("/var/run/docker.sock", script)
-        self.assertNotIn("/var/lib/docker/containers,dst=/var/lib/docker/containers", script)
+        self.assertNotIn(
+            "/var/lib/docker/containers,dst=/var/lib/docker/containers", script
+        )
         self.assertIn("python3 /opt/fabric_exporter.py", script)
         self.assertIn("FABRIC_GID_INDEX", script)
 
@@ -156,9 +223,15 @@ class ObservabilityStackTests(unittest.TestCase):
             (gid_root / "gid_attrs" / "types").mkdir(parents=True)
             (gid_root / "gid_attrs" / "ndevs").mkdir(parents=True)
             net_root.mkdir(parents=True)
-            (gid_root / "gids" / "4").write_text("0000:0000:0000:0000:0000:ffff:c0a8:640a\n", encoding="utf-8")
-            (gid_root / "gid_attrs" / "types" / "4").write_text("RoCE v2\n", encoding="utf-8")
-            (gid_root / "gid_attrs" / "ndevs" / "4").write_text("enp1s0f1np1\n", encoding="utf-8")
+            (gid_root / "gids" / "4").write_text(
+                "0000:0000:0000:0000:0000:ffff:c0a8:640a\n", encoding="utf-8"
+            )
+            (gid_root / "gid_attrs" / "types" / "4").write_text(
+                "RoCE v2\n", encoding="utf-8"
+            )
+            (gid_root / "gid_attrs" / "ndevs" / "4").write_text(
+                "enp1s0f1np1\n", encoding="utf-8"
+            )
             (gid_root / "state").write_text("ACTIVE\n", encoding="utf-8")
             (net_root / "carrier").write_text("1\n", encoding="utf-8")
             (net_root / "carrier_changes").write_text("2\n", encoding="utf-8")
@@ -185,11 +258,21 @@ class ObservabilityStackTests(unittest.TestCase):
                     fabric_exporter.FABRIC_NDEV,
                     fabric_exporter.FABRIC_GID_INDEX,
                 ) = old_values
-            self.assertIn("dgx_fabric_gid_valid{device=\"rocep1s0f1\",index=\"4\",port=\"1\"} 1", output)
-            self.assertIn("dgx_fabric_gid_ipv4_mapped{device=\"rocep1s0f1\",index=\"4\",port=\"1\"} 1", output)
-            self.assertIn("dgx_fabric_rocev2_gid{device=\"rocep1s0f1\",index=\"4\",port=\"1\"} 1", output)
-            self.assertIn("dgx_fabric_mtu{ndev=\"enp1s0f1np1\"} 9000", output)
-            self.assertIn("dgx_fabric_rdma_link_up{device=\"rocep1s0f1\",port=\"1\"} 1", output)
+            self.assertIn(
+                'dgx_fabric_gid_valid{device="rocep1s0f1",index="4",port="1"} 1', output
+            )
+            self.assertIn(
+                'dgx_fabric_gid_ipv4_mapped{device="rocep1s0f1",index="4",port="1"} 1',
+                output,
+            )
+            self.assertIn(
+                'dgx_fabric_rocev2_gid{device="rocep1s0f1",index="4",port="1"} 1',
+                output,
+            )
+            self.assertIn('dgx_fabric_mtu{ndev="enp1s0f1np1"} 9000', output)
+            self.assertIn(
+                'dgx_fabric_rdma_link_up{device="rocep1s0f1",port="1"} 1', output
+            )
 
     def test_environment_parser_rejects_shell_and_unknown_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

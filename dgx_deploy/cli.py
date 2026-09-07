@@ -45,7 +45,9 @@ def _parser() -> argparse.ArgumentParser:
         ("apply", "create and start a locked deployment"),
         ("start", "start the owned worker/head pair"),
         ("stop", "stop the owned worker/head pair"),
+        ("remove", "remove the owned worker/head pair"),
         ("update", "replace the owned pair with a locked deployment"),
+        ("fabric-apply", "apply and verify locked F1 fabric without containers"),
         ("rollback", "restore the exact captured image and command lock"),
     ):
         lifecycle = sub.add_parser(command, help=help_text)
@@ -132,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.config_command == "validate":
                 print(json.dumps({"profile_id": config["profile"]["profile_id"], "config_sha256": config_sha256(config)}))
             return 0
-        lock = _lock(config) if command in {"render", "plan", "apply", "start", "stop", "update", "rollback", "verify"} else None
+        lock = _lock(config) if command in {"render", "plan", "apply", "start", "stop", "remove", "update", "fabric-apply", "rollback", "verify"} else None
         if command == "plan":
             reject_mutation(apply=getattr(args, "apply", False), confirm=getattr(args, "confirm", None))
             print(json.dumps(render_plan(config, lock), sort_keys=True, indent=2))
@@ -154,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command == "verify" and args.dry_run:
             print(json.dumps(render_plan(config, lock), sort_keys=True, indent=2))
             return 0
-        if command in {"apply", "start", "stop", "update", "rollback"}:
+        if command in {"apply", "start", "stop", "remove", "update", "fabric-apply", "rollback"}:
             reject_mutation(apply=not args.dry_run, confirm=args.confirm)
             if not args.dry_run and args.confirm != deployment_id(config):
                 raise MutationDisabled("mutation is disabled: --confirm must equal the rendered deployment ID")
@@ -166,6 +168,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             engine.verify()
         elif command == "apply":
             engine.apply(_state_file(args, config))
+        elif command == "fabric-apply":
+            engine.apply_fabric()
         elif command == "start":
             engine.start()
         elif command == "stop":

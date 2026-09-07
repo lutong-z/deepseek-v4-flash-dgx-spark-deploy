@@ -20,9 +20,8 @@ def _hash_input(contract: Mapping[str, Any]) -> dict[str, Any]:
         for key in (
             "schema_version",
             "mode",
-            "profile_id",
-            "role",
             "node_addr",
+            "fabric",
             "api_port",
             "master_addr",
             "master_port",
@@ -53,6 +52,7 @@ def validate_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
         "container",
         "host",
         "node_addr",
+        "fabric",
         "master_addr",
         "master_port",
         "model_path",
@@ -88,10 +88,16 @@ def validate_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
     return dict(contract)
 
 
-def contract_json(config: Mapping[str, Any], role: str, lock: Mapping[str, Any] | None = None) -> str:
+def contract_json(
+    config: Mapping[str, Any],
+    role: str,
+    lock: Mapping[str, Any] | None = None,
+    *,
+    gid_index: int | None = None,
+) -> str:
     """Render and validate one complete service contract."""
 
-    value = render_contract(config, role, lock)
+    value = render_contract(config, role, lock, gid_index=gid_index)
     # The renderer's digest includes the complete object except its digest.
     digest = service_contract_sha256(value)
     value["service_contract_sha256"] = digest

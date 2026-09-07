@@ -21,11 +21,9 @@ _ROLES = ("worker", "head")
 _REQUIRED_LABELS = (
     "org.opencontainers.image.revision",
     "com.dgx-spark.architecture",
-    "com.dgx-spark.profile_sha256",
-    "com.dgx-spark.service_contract_sha256",
-    "com.dgx-spark.image_lock_sha256",
     "com.dgx-spark.vllm.commit",
     "com.dgx-spark.b12x.commit",
+    "com.dgx-spark.runtime-file-sha256",
 )
 _RUNTIME_ENV = {
     "NCCL_CROSS_NIC": "1",
@@ -111,7 +109,9 @@ def _container_name(config: Mapping[str, Any], role: str) -> str:
     if mode == "production":
         return f"dsv4-native432-dspark5-327k-seq5-{role}"
     if mode == "candidate":
-        return f"dsv4-candidate-native432-dspark5-327k-seq5-{role}"
+        limits = _profile(config)["limits"]
+        seq_limit = int(_deployment(config).get("runtime_max_num_seqs", limits["max_num_seqs"]))
+        return f"dsv4-candidate-native432-dspark5-327k-seq{seq_limit}-{role}"
     profile = _profile(config)
     return f"{profile['container']['name_prefix']}{role}"
 
@@ -146,7 +146,7 @@ def _cache_root(config: Mapping[str, Any], role: str) -> str:
     return str(PurePosixPath(str(deployment["cache_root"])) / f"dgx{rank}")
 
 
-def render_environment(config: Mapping[str, Any], role: str) -> dict[str, str]:
+def render_environment(config: Mapping[str, Any], role: str, *, gid_index: int | None = None) -> dict[str, str]:
     """Render the reviewed RDMA/GPU/runtime environment for one role."""
 
     deployment = _deployment(config)
@@ -162,7 +162,7 @@ def render_environment(config: Mapping[str, Any], role: str) -> dict[str, str]:
         }
     )
     role_gid = deployment.get(f"{role}_roce_gid_index")
-    gid = role_gid if role_gid is not None else deployment.get("roce_gid_index")
+    gid = gid_index if gid_index is not None else (role_gid if role_gid is not None else deployment.get("roce_gid_index"))
     if gid is not None:
         result["NCCL_IB_GID_INDEX"] = str(gid)
     result["NCCL_IB_MTU"] = str(deployment["roce_mtu"])
@@ -186,6 +186,10 @@ def render_service_argv(config: Mapping[str, Any], role: str) -> list[str]:
     model = profile["model"]
     service = profile["service"]
     limits = profile["limits"]
+    runtime_max_num_seqs = int(deployment.get("runtime_max_num_seqs", limits["max_num_seqs"]))
+    runtime_max_num_batched_tokens = int(
+        deployment.get("runtime_max_num_batched_tokens", limits["max_num_batched_tokens"])
+    )
     parsing = profile["parsing"]
     if role not in {"head", "worker"}:
         raise RenderError(f"unsupported role: {role}")
@@ -237,9 +241,9 @@ def render_service_argv(config: Mapping[str, Any], role: str) -> list[str]:
             "--max-model-len",
             str(limits["max_model_len"]),
             "--max-num-seqs",
-            str(limits["max_num_seqs"]),
+            str(runtime_max_num_seqs),
             "--max-num-batched-tokens",
-            str(limits["max_num_batched_tokens"]),
+            str(runtime_max_num_batched_tokens),
             "--gpu-memory-utilization",
             str(service["gpu_memory_utilization"]),
             "--enable-prefix-caching",
@@ -286,11 +290,9 @@ def _lock_image(lock: Mapping[str, Any] | None, role: str, config: Mapping[str, 
         labels = {
             "org.opencontainers.image.revision": "unlocked",
             "com.dgx-spark.architecture": "linux/arm64",
-            "com.dgx-spark.profile_sha256": config_sha256({"profile": _profile(config)}),
-            "com.dgx-spark.service_contract_sha256": "unlocked",
-            "com.dgx-spark.image_lock_sha256": "unlocked",
             "com.dgx-spark.vllm.commit": "unlocked",
             "com.dgx-spark.b12x.commit": "unlocked",
+            "com.dgx-spark.runtime-file-sha256": "unlocked",
         }
         return fallback, None, labels
     images = lock.get("images")
@@ -306,6 +308,7 @@ def render_container_argv(
     lock: Mapping[str, Any] | None = None,
     *,
     contract_source: str | None = None,
+    gid_index: int | None = None,
 ) -> list[str]:
     """Render a safe docker-create argv; never execute it."""
 
@@ -349,7 +352,7 @@ def render_container_argv(
         argv.extend(["--read-only", "--security-opt", "no-new-privileges:true"])
     for key in _REQUIRED_LABELS:
         argv.extend(["--label", f"{key}={labels[key]}"])
-    for key, value in render_environment(config, role).items():
+    for key, value in render_environment(config, role, gid_index=gid_index).items():
         argv.extend(["--env", f"{key}={value}"])
     argv.extend(
         [
@@ -378,10 +381,19 @@ def render_container_argv(
     return argv
 
 
-def render_contract(config: Mapping[str, Any], role: str, lock: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def render_contract(
+    config: Mapping[str, Any],
+    role: str,
+    lock: Mapping[str, Any] | None = None,
+    *,
+    gid_index: int | None = None,
+) -> dict[str, Any]:
     """Build one complete role contract, including command and verification locks."""
 
     image_ref, image_id, labels = _lock_image(lock, role, config)
+    fabric = fabric_spec(config, role)
+    if gid_index is not None:
+        fabric["gid_index"] = gid_index
     base: dict[str, Any] = {
         "schema_version": 1,
         "deployment_id": deployment_id(config),
@@ -391,7 +403,7 @@ def render_contract(config: Mapping[str, Any], role: str, lock: Mapping[str, Any
         "container": _container_name(config, role),
         "host": _role_value(_deployment(config), role, "host"),
         "node_addr": _role_value(_deployment(config), role, "node_addr"),
-        "fabric": fabric_spec(config, role),
+        "fabric": fabric,
         "api_port": int(_deployment(config)["api_port"]) if role == "head" else None,
         "master_addr": str(_deployment(config)["master_addr"]),
         "master_port": int(_deployment(config)["master_port"]),
@@ -399,9 +411,9 @@ def render_contract(config: Mapping[str, Any], role: str, lock: Mapping[str, Any
         "model_root": str(_deployment(config)["model_root"]),
         "model_manifest_sha256": str(_deployment(config)["model_manifest_sha256"]),
         "image": {"reference": image_ref, "image_id": image_id, "labels": labels},
-        "environment": render_environment(config, role),
+        "environment": render_environment(config, role, gid_index=gid_index),
         "service_argv": render_service_argv(config, role),
-        "container_argv": render_container_argv(config, role, lock),
+        "container_argv": render_container_argv(config, role, lock, gid_index=gid_index),
         "contract_path": _remote_contract_path(config, role),
     }
     digest_input = {
@@ -425,8 +437,14 @@ def render_contract(config: Mapping[str, Any], role: str, lock: Mapping[str, Any
     return base
 
 
-def render_contract_json(config: Mapping[str, Any], role: str, lock: Mapping[str, Any] | None = None) -> str:
-    return json.dumps(render_contract(config, role, lock), sort_keys=True, indent=2) + "\n"
+def render_contract_json(
+    config: Mapping[str, Any],
+    role: str,
+    lock: Mapping[str, Any] | None = None,
+    *,
+    gid_index: int | None = None,
+) -> str:
+    return json.dumps(render_contract(config, role, lock, gid_index=gid_index), sort_keys=True, indent=2) + "\n"
 
 
 def render_plan(config: Mapping[str, Any], lock: Mapping[str, Any] | None = None) -> dict[str, Any]:

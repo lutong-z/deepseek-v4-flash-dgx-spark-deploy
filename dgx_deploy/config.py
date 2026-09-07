@@ -11,6 +11,12 @@ from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROFILE = ROOT / "config" / "profiles" / "dsv4-native432-b12x-tp2.json"
+CANDIDATE_SEQ10_PROFILE = ROOT / "config" / "profiles" / "dsv4-native432-b12x-tp2-seq10.json"
+DEFAULT_PROFILE_ID = "dsv4-native432-b12x-tp2"
+CANDIDATE_SEQ10_PROFILE_ID = "dsv4-native432-b12x-tp2-seq10"
+DEFAULT_MAX_NUM_SEQS = 5
+DEFAULT_MAX_NUM_BATCHED_TOKENS = 1024
+
 
 # Keep this list explicit: an env file must not become an arbitrary override
 # surface for service flags or shell commands.
@@ -65,6 +71,10 @@ ALLOWED_KEYS = frozenset(
         "API_BIND_ADDR",
         "ALLOW_PUBLIC_API",
         "FORWARD_LOCAL_PORT",
+        "MAX_NUM_SEQS",
+        "MAX_NUM_BATCHED_TOKENS",
+        "ALLOW_PRODUCTION_IMAGES_IN_CANDIDATE",
+        "PRODUCTION_CHANGE_ALLOWED",
         "BASE_IMAGE_REF",
         "BUILD_CONTEXT",
         "CONTAINERFILE",
@@ -158,6 +168,23 @@ def _port(values: Mapping[str, str], key: str) -> int:
     value = int(raw)
     _reject(not 1 <= value <= 65535, f"{key} must be between 1 and 65535")
     return value
+def _runtime_limit(
+    values: Mapping[str, str],
+    key: str,
+    default: int,
+    mode: str,
+    production_allowed: bool = False,
+) -> int:
+    raw = values.get(key, "")
+    if not raw:
+        return default
+    _reject(
+        mode != "candidate" and not (mode == "production" and production_allowed),
+        f"{key} overrides require candidate mode or an explicitly authorized production change",
+    )
+    _reject(not raw.isdecimal() or int(raw) < 1, f"{key} must be a positive integer")
+    return int(raw)
+
 
 
 def _address(values: Mapping[str, str], key: str) -> str:
@@ -224,6 +251,40 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
     _reject(bool(missing), f"missing required values: {', '.join(missing)}")
     mode = values.get("DEPLOYMENT_MODE", "").strip().lower() or "generic"
     _reject(mode not in {"generic", "production", "candidate"}, "DEPLOYMENT_MODE must be generic, production, or candidate")
+    seq_override = values.get("MAX_NUM_SEQS", "")
+    batch_override = values.get("MAX_NUM_BATCHED_TOKENS", "")
+    _reject(bool(seq_override) != bool(batch_override), "MAX_NUM_SEQS and MAX_NUM_BATCHED_TOKENS must be set together")
+    production_change_allowed = values.get("PRODUCTION_CHANGE_ALLOWED", "") or "0"
+    _reject(production_change_allowed not in {"0", "1"}, "PRODUCTION_CHANGE_ALLOWED must be 0 or 1")
+    _reject(
+        mode != "production" and production_change_allowed == "1",
+        "PRODUCTION_CHANGE_ALLOWED is only valid in production mode",
+    )
+    runtime_max_num_seqs = _runtime_limit(
+        values,
+        "MAX_NUM_SEQS",
+        DEFAULT_MAX_NUM_SEQS,
+        mode,
+        production_allowed=production_change_allowed == "1",
+    )
+    runtime_max_num_batched_tokens = _runtime_limit(
+        values,
+        "MAX_NUM_BATCHED_TOKENS",
+        DEFAULT_MAX_NUM_BATCHED_TOKENS,
+        mode,
+        production_allowed=production_change_allowed == "1",
+    )
+    allow_production_images = values.get("ALLOW_PRODUCTION_IMAGES_IN_CANDIDATE", "") or "0"
+    _reject(allow_production_images not in {"0", "1"}, "ALLOW_PRODUCTION_IMAGES_IN_CANDIDATE must be 0 or 1")
+    _reject(
+        mode != "candidate" and allow_production_images == "1",
+        "ALLOW_PRODUCTION_IMAGES_IN_CANDIDATE is only valid in candidate mode",
+    )
+    profile_id = profile.get("profile_id")
+    _reject(
+        profile_id == CANDIDATE_SEQ10_PROFILE_ID and mode != "candidate",
+        "seq10 profile requires candidate mode",
+    )
     fabric_profile = values.get("FABRIC_PROFILE", "").strip().lower() or "auto"
     _reject(fabric_profile not in {"f0", "f1", "auto"}, "FABRIC_PROFILE must be f0, f1, or auto")
     head_fabric_cidr = values.get("HEAD_FABRIC_CIDR", "")
@@ -326,9 +387,10 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
     worker_devices = _safe_list(values, "WORKER_CUDA_VISIBLE_DEVICES")
     gid = values.get("ROCE_GID_INDEX", "")
     if gid:
-        _reject(not gid.isdecimal() or not 0 <= int(gid) <= 255, "ROCE_GID_INDEX must be between 0 and 255")
+        _reject(gid != "auto" and (not gid.isdecimal() or not 0 <= int(gid) <= 255), "ROCE_GID_INDEX must be between 0 and 255 or auto")
     mtu = _nonempty(values, "ROCE_MTU")
     _reject(not mtu.isdecimal() or not 576 <= int(mtu) <= 65535, "ROCE_MTU is outside the valid range")
+    gid_index = int(gid) if gid and gid != "auto" else None
 
     profile_id = profile.get("profile_id")
     _reject(not isinstance(profile_id, str) or not profile_id, "profile profile_id is required")
@@ -343,8 +405,8 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
             "worker_fabric_peer": worker_fabric_peer or None,
             "head_fabric_connection": head_fabric_connection or None,
             "worker_fabric_connection": worker_fabric_connection or None,
-            "head_roce_gid_index": int(head_roce_gid) if head_roce_gid else (int(gid) if gid else None),
-            "worker_roce_gid_index": int(worker_roce_gid) if worker_roce_gid else (int(gid) if gid else None),
+            "head_roce_gid_index": int(head_roce_gid) if head_roce_gid else gid_index,
+            "worker_roce_gid_index": int(worker_roce_gid) if worker_roce_gid else gid_index,
             "head_host": head_host,
             "worker_host": worker_host,
             "head_ssh_host": head_ssh_host,
@@ -368,6 +430,10 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
             "head_image_ref": head_image_ref,
             "worker_image_ref": worker_image_ref,
             "image_lock_file": _lock_file(values),
+            "runtime_max_num_seqs": runtime_max_num_seqs,
+            "runtime_max_num_batched_tokens": runtime_max_num_batched_tokens,
+            "allow_production_images_in_candidate": allow_production_images == "1",
+            "production_change_allowed": production_change_allowed == "1",
             "master_addr": master_addr,
             "master_port": master_port,
             "api_port": api_port,
@@ -379,7 +445,7 @@ def validate(values: Mapping[str, str], profile: Mapping[str, Any]) -> dict[str,
             "worker_hca": worker_hca,
             "head_cuda_visible_devices": head_devices,
             "worker_cuda_visible_devices": worker_devices,
-            "roce_gid_index": int(gid) if gid else None,
+            "roce_gid_index": gid_index,
             "roce_mtu": int(mtu),
             "api_bind_addr": api_bind,
             "allow_public_api": allow_public_api == "1",
@@ -519,6 +585,15 @@ _PROFILE_VALUES: dict[tuple[str, ...], Any] = {
     ("security", "api_bind_default"): "127.0.0.1",
     ("security", "model_mount_read_only"): True,
 }
+_PROFILE_VARIANT_VALUES: dict[str, dict[tuple[str, ...], Any]] = {
+    CANDIDATE_SEQ10_PROFILE_ID: {
+        ("profile_id",): CANDIDATE_SEQ10_PROFILE_ID,
+        ("limits", "max_num_seqs"): 10,
+        ("limits", "max_num_batched_tokens"): 8192,
+        ("image", "candidate_id"): "dsv4-0731-native432-b12x-seq10",
+    }
+}
+
 
 
 def _profile_at(profile: Mapping[str, Any], path: tuple[str, ...]) -> Any:
@@ -536,7 +611,11 @@ def _validate_profile(profile: Mapping[str, Any]) -> None:
             not isinstance(current, Mapping) or frozenset(current) != expected_keys,
             f"profile keys changed at {'.'.join(path) or '<root>'}",
         )
-    for path, expected in _PROFILE_VALUES.items():
+    profile_id = profile.get("profile_id")
+    expected_values = dict(_PROFILE_VALUES)
+    if isinstance(profile_id, str):
+        expected_values.update(_PROFILE_VARIANT_VALUES.get(profile_id, {}))
+    for path, expected in expected_values.items():
         _reject(_profile_at(profile, path) != expected, f"profile invariant changed: {'.'.join(path)}")
 
 
@@ -546,10 +625,13 @@ def load_profile(path: Path = DEFAULT_PROFILE) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ConfigError(f"cannot read profile: {path}") from exc
-    _reject(resolved != DEFAULT_PROFILE.resolve(), "only the committed default profile may be used")
+    allowed = {DEFAULT_PROFILE.resolve(), CANDIDATE_SEQ10_PROFILE.resolve()}
+    _reject(resolved not in allowed, "profile must be one of the committed reviewed profiles")
     _reject(not isinstance(value, dict), "profile must be a JSON object")
     _validate_profile(value)
     return value
+
+
 
 
 def load_config(env_file: Path, profile_file: Path = DEFAULT_PROFILE) -> dict[str, Any]:

@@ -13,11 +13,14 @@ from .config import ConfigError, canonical_json
 REQUIRED_IMAGE_LABELS = (
     "org.opencontainers.image.revision",
     "com.dgx-spark.architecture",
+    "com.dgx-spark.vllm.commit",
+    "com.dgx-spark.b12x.commit",
+    "com.dgx-spark.runtime-file-sha256",
+)
+OPTIONAL_IMAGE_LABELS = (
     "com.dgx-spark.profile_sha256",
     "com.dgx-spark.service_contract_sha256",
     "com.dgx-spark.image_lock_sha256",
-    "com.dgx-spark.vllm.commit",
-    "com.dgx-spark.b12x.commit",
 )
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -62,23 +65,23 @@ def _content_sha256(value: Mapping[str, Any]) -> str:
     payload = dict(value)
     payload.pop("lock_sha256", None)
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
-
-
 def _validate_labels(labels: Mapping[str, Any], role: str) -> dict[str, str]:
-    _exact_keys(labels, set(REQUIRED_IMAGE_LABELS), f"images.{role}.labels")
+    allowed = set(REQUIRED_IMAGE_LABELS) | set(OPTIONAL_IMAGE_LABELS)
+    _exact_keys(labels, allowed, f"images.{role}.labels")
     normalized: dict[str, str] = {}
-    for key in REQUIRED_IMAGE_LABELS:
+    for key in REQUIRED_IMAGE_LABELS + OPTIONAL_IMAGE_LABELS:
+        if key not in labels:
+            if key in OPTIONAL_IMAGE_LABELS:
+                continue
+            _expect(False, f"images.{role}.labels.{key} must be non-empty")
         value = labels.get(key)
         _expect(isinstance(value, str) and bool(value), f"images.{role}.labels.{key} must be non-empty")
         _expect(_PLACEHOLDER.search(value) is None, f"images.{role}.labels.{key} contains a placeholder")
         normalized[key] = value
     _expect(normalized["com.dgx-spark.architecture"] == "linux/arm64", f"images.{role} architecture label must be linux/arm64")
-    for key in (
-        "com.dgx-spark.profile_sha256",
-        "com.dgx-spark.service_contract_sha256",
-        "com.dgx-spark.image_lock_sha256",
-    ):
-        _expect(_SHA256.fullmatch(normalized[key]) is not None, f"images.{role}.labels.{key} must be a sha256")
+    for key in ("com.dgx-spark.image_lock_sha256", "com.dgx-spark.runtime-file-sha256"):
+        if key in normalized:
+            _expect(_SHA256.fullmatch(normalized[key]) is not None, f"images.{role}.labels.{key} must be a sha256")
     for key in (
         "org.opencontainers.image.revision",
         "com.dgx-spark.vllm.commit",
@@ -122,7 +125,15 @@ def load_deployment_lock(path: Path, config: Mapping[str, Any]) -> dict[str, Any
         _expect(reference == deployment.get(f"{role}_image_ref"), f"deployment {role} image reference does not match lock")
         is_candidate = _CANDIDATE_REF.search(reference) is not None
         if mode == "candidate":
-            _expect(is_candidate, f"candidate images.{role}.reference must be candidate-namespaced")
+            if not is_candidate:
+                _expect(
+                    bool(deployment.get("allow_production_images_in_candidate")),
+                    "candidate production image reuse requires explicit authorization",
+                )
+                _expect(
+                    reference == image_id,
+                    f"candidate {role} production image reference must equal its locked image ID",
+                )
         else:
             _expect(not is_candidate, f"production images.{role}.reference must not be candidate-namespaced")
         normalized_labels = _validate_labels(_mapping(image.get("labels"), f"images.{role}.labels"), role)

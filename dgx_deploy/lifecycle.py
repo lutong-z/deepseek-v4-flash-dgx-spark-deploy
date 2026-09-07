@@ -20,16 +20,19 @@ from pathlib import Path
 from .config import ConfigError, canonical_json, config_sha256
 from .fabric import (
     FabricError,
+    FabricNotReady,
     apply_commands,
     discovery_commands,
     fabric_spec,
     gid_attribute_commands,
-    gid_discovery_command,
+    helper_argv,
+    nm_connection_state_command,
     parse_address_output,
     parse_gid_attributes,
     parse_gid_discovery_output,
     parse_gid_output,
     parse_link_output,
+    parse_nm_connection_state,
     verify_rdma_output,
 )
 from .contract import contract_json
@@ -43,6 +46,10 @@ class LifecycleError(ConfigError):
     """A lifecycle precondition, operation, or verification gate failed."""
 
 _CANDIDATE_REF = re.compile(r"(?:^|[/:._-])candidate(?:[/:._-]|$)", re.IGNORECASE)
+
+
+_FABRIC_GID_ATTEMPTS = 12
+_FABRIC_GID_INTERVAL = 1.0
 
 
 @dataclass(frozen=True)
@@ -200,6 +207,7 @@ class DeploymentEngine:
         self.scp_runner = scp_runner or run_local
         self.sleep = sleep
         self.records: list[OperationRecord] = []
+        self._gid_overrides: dict[str, int] = {}
         self.contracts = {role: render_contract(config, role, self.lock) for role in ("worker", "head")}
         self._validate_contracts()
 
@@ -226,9 +234,53 @@ class DeploymentEngine:
             if self.mode == "production":
                 _fail(is_candidate, f"production {role} image reference must not be candidate-namespaced")
             labels = image.get("labels")
+
             _fail(not isinstance(labels, Mapping), f"{role} image labels are missing")
             for key in REQUIRED_IMAGE_LABELS:
                 _fail(not labels.get(key), f"{role} image label {key} is empty")
+    def _read_gid_with_retry(
+        self,
+        role: str,
+        command: Sequence[str],
+        spec: Mapping[str, Any],
+        *,
+        discovery: bool,
+    ) -> tuple[int, str]:
+        last_error: FabricNotReady | None = None
+        for attempt in range(_FABRIC_GID_ATTEMPTS):
+            result = self._remote(role, command)
+            try:
+                if discovery:
+                    return parse_gid_discovery_output(result.stdout)
+                parse_gid_output(result.stdout, spec)
+                return int(spec["gid_index"]), result.stdout.strip().lower()
+            except FabricNotReady as exc:
+                last_error = exc
+                if attempt + 1 < _FABRIC_GID_ATTEMPTS:
+                    self.sleep(_FABRIC_GID_INTERVAL)
+        raise LifecycleError(
+            f"{role} GID did not become ready after {_FABRIC_GID_ATTEMPTS} attempts"
+        ) from last_error
+
+    def _read_gid_attributes_with_retry(
+        self,
+        role: str,
+        commands: Sequence[Sequence[str]],
+        spec: Mapping[str, Any],
+    ) -> None:
+        last_error: FabricNotReady | None = None
+        for attempt in range(_FABRIC_GID_ATTEMPTS):
+            results = [self._remote(role, command) for command in commands]
+            try:
+                parse_gid_attributes(results[0].stdout, results[1].stdout, spec)
+                return
+            except FabricNotReady as exc:
+                last_error = exc
+                if attempt + 1 < _FABRIC_GID_ATTEMPTS:
+                    self.sleep(_FABRIC_GID_INTERVAL)
+        raise LifecycleError(
+            f"{role} GID attributes did not become ready after {_FABRIC_GID_ATTEMPTS} attempts"
+        ) from last_error
 
     def _fabric_preflight(self, role: str, *, require_address: bool = True) -> None:
         if str(self.deployment.get("fabric_profile", "auto")) == "f0":
@@ -257,21 +309,20 @@ class DeploymentEngine:
                         verify_rdma_output(result.stdout, spec)
                 elif command[0] == "docker" and "/bin/cat" in command:
                     if require_address:
-                        parse_gid_output(result.stdout, spec)
+                        discovered_gid, _ = self._read_gid_with_retry(role, command, spec, discovery=False)
                 elif command[0] == "docker" and "/bin/sh" in command:
                     if require_address:
-                        discovered_gid, _ = parse_gid_discovery_output(result.stdout)
+                        discovered_gid, _ = self._read_gid_with_retry(role, command, spec, discovery=True)
                         key = f"{role}_roce_gid_index"
                         configured = self.deployment.get(key)
                         if configured is not None:
                             _fail(int(configured) != discovered_gid, f"{role} discovered GID index differs from lock")
-                        self.deployment[key] = discovered_gid
+                        self._gid_overrides[role] = discovered_gid
             if require_address and spec["profile"] == "f1":
                 gid_index = discovered_gid if discovered_gid is not None else self.deployment.get(f"{role}_roce_gid_index")
                 _fail(gid_index is None, f"{role} has no discovered GID index")
                 attrs = gid_attribute_commands(self.config, role, image_ref, int(gid_index))
-                attr_results = [self._remote(role, command) for command in attrs]
-                parse_gid_attributes(attr_results[0].stdout, attr_results[1].stdout, spec)
+                self._read_gid_attributes_with_retry(role, attrs, spec)
         except FabricError as exc:
             raise LifecycleError(str(exc)) from exc
 
@@ -288,10 +339,13 @@ class DeploymentEngine:
         for role in _role_order():
             self._fabric_preflight(role, require_address=True)
         self._refresh_contracts()
+        self._validate_contracts()
 
     def _refresh_contracts(self) -> None:
-        self.contracts = {role: render_contract(self.config, role, self.lock) for role in ("worker", "head")}
-        self._validate_contracts()
+        self.contracts = {
+            role: render_contract(self.config, role, self.lock, gid_index=self._gid_overrides.get(role))
+            for role in ("worker", "head")
+        }
 
     def _remote(self, role: str, argv: Sequence[str]) -> CommandResult:
         command = tuple(str(item) for item in argv)
@@ -338,7 +392,17 @@ class DeploymentEngine:
                 "worker": "sha256:828171dd2c4970777993837b7d5234adf905a9ddc20503cd392a95c74b42ada8",
             }[role]
         )
-        _fail(not (current_owner or legacy_owner), f"refusing to mutate unowned {role} container")
+        locked_image = contract.get("image")
+        locked_labels = locked_image.get("labels") if isinstance(locked_image, Mapping) else None
+        lock_owner = (
+            self.mode == "production"
+            and labels.get("com.dgx-spark.role") == role
+            and isinstance(locked_image, Mapping)
+            and str(inspect.get("Image", "")) == str(locked_image.get("image_id", ""))
+            and isinstance(locked_labels, Mapping)
+            and all(labels.get(str(key)) == str(value) for key, value in locked_labels.items())
+        )
+        _fail(not (current_owner or legacy_owner or lock_owner), f"refusing to mutate unowned {role} container")
 
     def preflight(self, *, require_model_marker: bool = True, require_fabric: bool = True) -> None:
         """Check Docker/image/model/GPU/RDMA/network prerequisites on both nodes."""
@@ -353,6 +417,7 @@ class DeploymentEngine:
             hca = str(self.deployment[f"{role}_hca"]).split(",", 1)[0]
             self._remote(role, ["ibdev2netdev", "-v"])
             self._fabric_preflight(role, require_address=require_fabric)
+            contract = self.contracts[role]
             image_result = self._remote(role, ["docker", "image", "inspect", "--format", "{{json .}}", str(contract["image"]["reference"])])
             _fail(not image_result.stdout.strip(), f"{role} image inspect returned no data")
             image_object = _inspect_object(_json_stdout(image_result, f"{role} image inspect"), f"{role} image inspect")
@@ -374,6 +439,18 @@ class DeploymentEngine:
                 self._remote(role, ["test", "-r", str(model_root / model_file)])
             self._remote(role, ["test", "-r", str(model_root)])
             self._remote(role, ["test", "-n", hca])
+
+    def _capture_fabric_state(self) -> dict[str, Any]:
+        if str(self.deployment.get("fabric_profile", "auto")) != "f1":
+            return {}
+        captured: dict[str, Any] = {}
+        for role in _role_order():
+            spec = fabric_spec(self.config, role)
+            result = self._remote(role, nm_connection_state_command(self.config, role))
+            state = parse_nm_connection_state(result.stdout, spec)
+            state["spec"] = spec
+            captured[role] = state
+        return captured
 
     def capture_rollback(self, state_file: Path) -> dict[str, Any]:
         """Capture exact owned image/command/labels before any mutation."""
@@ -410,10 +487,7 @@ class DeploymentEngine:
                 },
                 "running": bool(state.get("Running")) if isinstance(state, Mapping) else False,
             }
-        fabric_state: dict[str, Any] = {}
-        if str(self.deployment.get("fabric_profile", "auto")) == "f1":
-            for role in _role_order():
-                fabric_state[role] = fabric_spec(self.config, role)
+        fabric_state = self._capture_fabric_state()
         state = {
             "schema_version": 1,
             "deployment_id": deployment_id(self.config),
@@ -438,6 +512,132 @@ class DeploymentEngine:
                 os.unlink(temporary)
         return state
 
+    def _nmcli_mutation(self, role: str, args: Sequence[str]) -> list[str]:
+        image_ref = str(self.contracts[role]["image"]["reference"])
+        return helper_argv(image_ref, ["/usr/bin/nmcli", *[str(arg) for arg in args]], writable=True)
+
+    def _restore_fabric_state(self, fabric_state: Mapping[str, Any] | None) -> None:
+        if str(self.deployment.get("fabric_profile", "auto")) != "f1":
+            return
+        _fail(not isinstance(fabric_state, Mapping), "rollback fabric state is missing")
+        actions: list[tuple[str, list[str]]] = []
+        for role in _role_order():
+            state = fabric_state.get(role)
+            _fail(not isinstance(state, Mapping), f"rollback fabric state has no {role} record")
+            spec = fabric_spec(self.config, role)
+            captured_spec = state.get("spec")
+            _fail(not isinstance(captured_spec, Mapping), f"rollback fabric {role} spec is missing")
+            for key in ("profile", "role", "interface", "hca", "address", "peer", "cidr", "connection", "mtu"):
+                _fail(captured_spec.get(key) != spec.get(key), f"rollback fabric {role} {key} differs from captured state")
+            target = str(state.get("target_connection", ""))
+            _fail(target != str(spec["connection"]), f"rollback fabric {role} target connection differs from config")
+            target_existed = state.get("target_existed")
+            _fail(not isinstance(target_existed, bool), f"rollback fabric {role} target existence is malformed")
+            expected_active = state.get("active_connection")
+            expected_uuid = state.get("active_uuid")
+            if expected_active is not None:
+                _fail(not isinstance(expected_active, str) or not expected_active, f"rollback fabric {role} active connection is malformed")
+                _fail(not isinstance(expected_uuid, str) or not expected_uuid, f"rollback fabric {role} active UUID is malformed")
+            current_result = self._remote(role, nm_connection_state_command(self.config, role))
+            current = parse_nm_connection_state(current_result.stdout, spec)
+            current_target_exists = bool(current["target_existed"])
+            if target_existed:
+                _fail(not current_target_exists, f"rollback fabric {role} pre-existing target profile disappeared")
+                _fail(current["target_uuid"] != state.get("target_uuid"), f"rollback fabric {role} target UUID differs")
+            elif current_target_exists:
+                _fail(current["target_device"] not in {str(spec["interface"]), "--", ""}, f"rollback fabric {role} target device differs")
+            active_name = current.get("active_connection")
+            if active_name is not None:
+                _fail(active_name not in {target, expected_active}, f"rollback fabric {role} has an unexpected active profile")
+                if active_name == expected_active:
+                    _fail(current.get("active_uuid") != expected_uuid, f"rollback fabric {role} active UUID differs")
+            if bool(current.get("target_active")) and active_name == target and target != expected_active:
+                actions.append((role, self._nmcli_mutation(role, ["connection", "down", target])))
+            if current_target_exists and not target_existed:
+                actions.append((role, self._nmcli_mutation(role, ["connection", "delete", target])))
+            if expected_active is not None and active_name != expected_active:
+                actions.append((role, self._nmcli_mutation(role, ["connection", "up", str(expected_active)])))
+        for role, command in actions:
+            try:
+                self._remote(role, command)
+            except LifecycleError as exc:
+                detail = str(exc).lower()
+                is_down = len(command) >= 3 and command[-3:-1] == ["connection", "down"]
+                target_name = str(command[-1]).lower() if command else ""
+                already_inactive = (
+                    is_down
+                    and bool(target_name)
+                    and (
+                        f"'{target_name}' is not an active connection" in detail
+                        or f'"{target_name}" is not an active connection' in detail
+                        or "no active connection provided" in detail
+                    )
+                )
+                if not already_inactive:
+                    raise
+        for role in _role_order():
+            state = fabric_state[role]
+            spec = fabric_spec(self.config, role)
+            result = self._remote(role, nm_connection_state_command(self.config, role))
+            restored = parse_nm_connection_state(result.stdout, spec)
+            target_existed = bool(state["target_existed"])
+            _fail(bool(restored["target_existed"]) != target_existed, f"rollback fabric {role} target profile restoration differs")
+            if target_existed:
+                _fail(restored["target_uuid"] != state["target_uuid"], f"rollback fabric {role} target UUID restoration differs")
+            expected_active = state.get("active_connection")
+            if expected_active is None:
+                _fail(restored.get("active_connection") is not None, f"rollback fabric {role} unexpectedly has an active profile")
+            else:
+                _fail(restored.get("active_connection") != expected_active, f"rollback fabric {role} active profile restoration differs")
+                _fail(restored.get("active_uuid") != state.get("active_uuid"), f"rollback fabric {role} active UUID restoration differs")
+
+    def apply_fabric(self) -> None:
+        """Apply and verify F1 network state without inspecting containers."""
+        _fail(str(self.deployment.get("fabric_profile", "auto")) != "f1", "fabric-only apply requires FABRIC_PROFILE=f1")
+        captured = self._capture_fabric_state()
+        try:
+            self._apply_fabric()
+        except LifecycleError as primary:
+            try:
+                self._restore_fabric_state(captured)
+            except LifecycleError as recovery:
+                raise LifecycleError(f"{primary}; fabric recovery failed: {recovery}") from primary
+            raise
+    def _remove_legacy_candidate_profiles(self, fabric_state: Mapping[str, Any]) -> None:
+        """Clean exact candidate profiles from a pre-transaction rollback state."""
+        _fail(self.mode != "candidate", "legacy fabric cleanup is allowed only in candidate mode")
+        current_by_role: dict[str, dict[str, Any]] = {}
+        specs: dict[str, dict[str, Any]] = {}
+        for role in _role_order():
+            captured = fabric_state.get(role)
+            _fail(not isinstance(captured, Mapping), f"legacy fabric state has no {role} record")
+            spec = fabric_spec(self.config, role)
+            specs[role] = spec
+            for key in ("profile", "role", "interface", "hca", "address", "peer", "cidr", "connection", "mtu"):
+                _fail(captured.get(key) != spec.get(key), f"legacy fabric {role} {key} differs from config")
+            target = str(spec["connection"])
+            _fail("candidate" not in target.lower(), f"legacy fabric {role} target is not candidate-owned")
+            current_result = self._remote(role, nm_connection_state_command(self.config, role))
+            current = parse_nm_connection_state(current_result.stdout, spec)
+            current_by_role[role] = current
+            if current["target_existed"]:
+                _fail(current["target_device"] not in {str(spec["interface"]), "--", ""}, f"legacy fabric {role} target device differs")
+        for role in _role_order():
+            spec = specs[role]
+            target = str(spec["connection"])
+            current = current_by_role[role]
+            if current["target_existed"]:
+                if current["target_active"]:
+                    self._remote(role, ["nmcli", "connection", "down", target])
+                self._remote(role, ["nmcli", "connection", "delete", target])
+        for role in _role_order():
+            spec = specs[role]
+            current_result = self._remote(role, nm_connection_state_command(self.config, role))
+            final = parse_nm_connection_state(current_result.stdout, spec)
+            _fail(final["target_existed"], f"legacy fabric {role} candidate profile remains")
+            _fail(final["active_connection"] == str(spec["connection"]), f"legacy fabric {role} candidate profile remains active")
+
+
     def _stage(self) -> None:
         remote_root = str(self.deployment["remote_root"])
         model_root = Path(str(self.deployment["model_root"]))
@@ -456,8 +656,17 @@ class DeploymentEngine:
                 env_path = Path(directory) / f"{role}.env"
                 marker_path = Path(directory) / "model.lock.sha256"
                 marker_path.write_text(str(self.deployment["model_manifest_sha256"]) + "\n", encoding="ascii")
-                contract_path.write_text(contract_json(self.config, role, self.lock), encoding="utf-8")
-                env_path.write_text("".join(f"{key}={value}\n" for key, value in render_environment(self.config, role).items()), encoding="utf-8")
+                contract_path.write_text(
+                    contract_json(self.config, role, self.lock, gid_index=self._gid_overrides.get(role)),
+                    encoding="utf-8",
+                )
+                env_path.write_text(
+                    "".join(
+                        f"{key}={value}\n"
+                        for key, value in render_environment(self.config, role, gid_index=self._gid_overrides.get(role)).items()
+                    ),
+                    encoding="utf-8",
+                )
                 ssh = dict(self.deployment)
                 for source, destination in (
                     (contract_path, remote_contract),
@@ -486,10 +695,12 @@ class DeploymentEngine:
             if inspect is not None:
                 self._assert_owned(role, inspect)
                 self._remote(role, ["docker", "container", "rm", str(self.contracts[role]["container"])])
-
     def _create(self) -> None:
         for role in _role_order():
-            self._remote(role, render_container_argv(self.config, role, self.lock))
+            self._remote(
+                role,
+                render_container_argv(self.config, role, self.lock, gid_index=self._gid_overrides.get(role)),
+            )
 
     def _start(self) -> None:
         for role in _role_order():
@@ -551,12 +762,19 @@ class DeploymentEngine:
             self._create()
             self._start()
             self.verify(preflight=False)
-        except LifecycleError:
+        except LifecycleError as original:
             previous_roles = captured.get("roles", {})
-            if update and isinstance(previous_roles, Mapping) and all(isinstance(previous_roles.get(role), Mapping) for role in _role_order()):
-                self.rollback(state_file)
-            else:
-                self._cleanup_partial()
+            recovery_errors: list[str] = []
+            try:
+                if update and isinstance(previous_roles, Mapping) and all(isinstance(previous_roles.get(role), Mapping) for role in _role_order()):
+                    self.rollback(state_file)
+                else:
+                    self._cleanup_partial()
+                    self._restore_fabric_state(captured.get("fabric"))
+            except LifecycleError as recovery:
+                recovery_errors.append(str(recovery))
+            if recovery_errors:
+                raise LifecycleError(f"{original}; recovery failed: {'; '.join(recovery_errors)}") from original
             raise
     def start(self) -> None:
         self.preflight()
@@ -671,6 +889,14 @@ class DeploymentEngine:
         if all(role_states[role] is None for role in _role_order()):
             _fail(self.mode != "candidate", "empty rollback state is allowed only in candidate mode")
             self._remove_empty_rollback_targets()
+            fabric_state = state.get("fabric")
+            if (
+                isinstance(fabric_state, Mapping)
+                and all(isinstance(fabric_state.get(role), Mapping) and "spec" not in fabric_state[role] for role in _role_order())
+            ):
+                self._remove_legacy_candidate_profiles(fabric_state)
+            else:
+                self._restore_fabric_state(fabric_state)
             return
         _fail(any(role_states[role] is None for role in _role_order()), "rollback state must contain both previous roles or neither")
         for role in _role_order():
@@ -684,6 +910,7 @@ class DeploymentEngine:
         for role in _role_order():
             old = role_states[role]
             self._remote(role, ["docker", "image", "inspect", str(old["image"])])
+        self._restore_fabric_state(state.get("fabric"))
         self._remove_rollback_targets(role_states)
         for role in _role_order():
             old = role_states[role]

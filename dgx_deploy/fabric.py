@@ -13,10 +13,15 @@ class FabricError(ValueError):
     """A fabric profile or host read-back is unsafe or inconsistent."""
 
 
+class FabricNotReady(FabricError):
+    """A valid fabric object has not become usable yet."""
+
+
 _F1_IFACE = "enp1s0f1np1"
 _F1_HCA = "rocep1s0f1"
 _F1_MTU = 9000
 _F1_GID = re.compile(r"^(?:[0-9a-f]{4}:){7}[0-9a-f]{4}$", re.IGNORECASE)
+_IPV4_MAPPED_GID = re.compile(r"^0000:0000:0000:0000:0000:ffff:[0-9a-f]{4}:[0-9a-f]{4}$", re.IGNORECASE)
 
 
 def _fail(condition: bool, message: str) -> None:
@@ -72,6 +77,50 @@ def fabric_spec(config: Mapping[str, Any], role: str) -> dict[str, Any]:
             _fail(not isinstance(value["gid_index"], int) or not 0 <= value["gid_index"] <= 255, f"{role} f1 GID index is outside 0..255")
     return value
 
+def nm_connection_state_command(config: Mapping[str, Any], role: str) -> list[str]:
+    """Read exact NetworkManager profile identity for one reviewed role."""
+    fabric = fabric_spec(config, role)
+    _fail(fabric["profile"] != "f1", "NetworkManager state requires FABRIC_PROFILE=f1")
+    return ["nmcli", "-t", "-f", "NAME,UUID,DEVICE,ACTIVE", "connection", "show"]
+
+
+def parse_nm_connection_state(stdout: str, spec: Mapping[str, Any]) -> dict[str, Any]:
+    """Parse nmcli terse profile output without accepting ambiguous rows."""
+    target_name = str(spec["connection"])
+    profiles: list[dict[str, Any]] = []
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        fields = line.split(":")
+        _fail(len(fields) != 4, f"{spec['role']} NetworkManager profile read-back is malformed")
+        name, uuid, device, active = (field.strip() for field in fields)
+        _fail(not name or not uuid, f"{spec['role']} NetworkManager profile identity is incomplete")
+        profiles.append(
+            {
+                "name": name,
+                "uuid": uuid,
+                "device": device,
+                "active": active.lower() in {"yes", "true", "activated"},
+            }
+        )
+    targets = [profile for profile in profiles if profile["name"] == target_name]
+    _fail(len(targets) > 1, f"{spec['role']} NetworkManager target profile is ambiguous")
+    active = [profile for profile in profiles if profile["active"] and profile["device"] == spec["interface"]]
+    _fail(len(active) > 1, f"{spec['role']} has multiple active NetworkManager profiles")
+    target = targets[0] if targets else None
+    active_profile = active[0] if active else None
+    return {
+        "interface": str(spec["interface"]),
+        "target_connection": target_name,
+        "target_existed": target is not None,
+        "target_uuid": target["uuid"] if target is not None else None,
+        "target_device": target["device"] if target is not None else None,
+        "target_active": bool(target["active"]) if target is not None else False,
+        "active_connection": active_profile["name"] if active_profile is not None else None,
+        "active_uuid": active_profile["uuid"] if active_profile is not None else None,
+        "active_device": active_profile["device"] if active_profile is not None else None,
+    }
+
 
 def helper_argv(image_ref: str, command: Sequence[str], *, writable: bool = False) -> list[str]:
     """Run one fixed host command through the reviewed privileged image helper."""
@@ -119,13 +168,18 @@ def discovery_commands(config: Mapping[str, Any], role: str, image_ref: str) -> 
 def gid_discovery_command(config: Mapping[str, Any], role: str, image_ref: str) -> list[str]:
     spec = fabric_spec(config, role)
     hca = str(spec["hca"])
+    interface = str(spec["interface"])
     script = (
         "for i in $(seq 0 31); do "
         f"p=/sys/class/infiniband/{hca}/ports/1/gids/$i; "
-        "if test -r \"$p\"; then g=$(cat \"$p\"); "
-        "case \"$g\" in 0000:0000:0000:0000:0000:0000:0000:0000) ;; "
-        "*) printf '%s=%s\\n' \"$i\" \"$g\"; exit 0 ;; esac; fi; "
-        "done; exit 1"
+        f"n=/sys/class/infiniband/{hca}/ports/1/gid_attrs/ndevs/$i; "
+        f"t=/sys/class/infiniband/{hca}/ports/1/gid_attrs/types/$i; "
+        "if test -r \"$p\" && test -r \"$n\" && test -r \"$t\"; then "
+        "g=$(cat \"$p\"); ndev=$(cat \"$n\"); typ=$(cat \"$t\"); "
+        f"if test \"$ndev\" = \"{interface}\" && test \"$typ\" = \"RoCE v2\"; then "
+        "case \"$g\" in 0000:0000:0000:0000:0000:ffff:*) printf '%s=%s\\n' \"$i\" \"$g\"; exit 0 ;; esac; "
+        "fi; fi; "
+        "done; exit 0"
     )
     return helper_argv(image_ref, ["/bin/sh", "-c", script])
 
@@ -135,10 +189,10 @@ def parse_gid_discovery_output(stdout: str) -> tuple[int, str]:
         if "=" not in line:
             continue
         index, value = line.split("=", 1)
-        if index.isdecimal() and _F1_GID.fullmatch(value.strip()):
-            if set(value.replace(":", "").lower()) != {"0"}:
-                return int(index), value.strip().lower()
-    raise FabricError("no populated RoCE GID was discovered")
+        value = value.strip().lower()
+        if index.isdecimal() and _IPV4_MAPPED_GID.fullmatch(value):
+            return int(index), value
+    raise FabricNotReady("no populated IPv4-mapped RoCE GID was discovered")
 def gid_attribute_commands(config: Mapping[str, Any], role: str, image_ref: str, gid_index: int) -> list[list[str]]:
     spec = fabric_spec(config, role)
     base = f"/sys/class/infiniband/{spec['hca']}/ports/1/gid_attrs"
@@ -149,6 +203,8 @@ def gid_attribute_commands(config: Mapping[str, Any], role: str, image_ref: str,
 
 
 def parse_gid_attributes(ndev_stdout: str, type_stdout: str, spec: Mapping[str, Any]) -> None:
+    if not ndev_stdout.strip() or not type_stdout.strip():
+        raise FabricNotReady(f"{spec['role']} GID attributes are not ready")
     _fail(ndev_stdout.strip() != str(spec["interface"]), f"{spec['role']} GID ndev does not match f1 interface")
     _fail(type_stdout.strip().lower() not in {"rocev2", "roce v2"}, f"{spec['role']} GID type is not RoCEv2")
 
@@ -234,7 +290,8 @@ def parse_link_output(stdout: str, spec: Mapping[str, Any]) -> None:
 def parse_gid_output(stdout: str, spec: Mapping[str, Any]) -> None:
     value = stdout.strip().lower()
     _fail(not _F1_GID.fullmatch(value), f"{spec['role']} GID read-back is malformed")
-    _fail(set(value.replace(":", "")) == {"0"}, f"{spec['role']} configured GID is all-zero")
+    if set(value.replace(":", "")) == {"0"}:
+        raise FabricNotReady(f"{spec['role']} configured GID is all-zero")
 
 
 def verify_rdma_output(stdout: str, spec: Mapping[str, Any]) -> None:

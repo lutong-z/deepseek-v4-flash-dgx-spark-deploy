@@ -1,74 +1,137 @@
 # Model lock, fetch, and verification
 
-## Pinned source
+`model.lock.json` is the only model source of truth. It pins the public
+`deepseek-ai/DeepSeek-V4-Flash-0731` tree to revision
+`7872f01b1d1fe23eabc4c98b48bffcef5a386062`, including the 54-file allowlist, 48
+safetensors shards, sizes, and hashes. The lock contains no weights or token.
 
-`model.lock.json` is the reviewed source of truth for
-`deepseek-ai/DeepSeek-V4-Flash-0731` at the immutable revision
-`7872f01b1d1fe23eabc4c98b48bffcef5a386062`. The public Hugging Face model API
-reports the MIT license, `transformers` library, `deepseek_v4` model type, and
-`DeepseekV4ForCausalLM` architecture. The lock was recorded from the public
-model and tree API metadata on 2026-09-02; it does not contain model data or a
-credential.
+The runtime layout is deliberately exact and consistent across fetch,
+verification, configuration, and Docker:
 
-The allowlist contains 54 files: the model config, generation config, license,
-index, two tokenizer files, and 48 safetensors shards. The selected files total
-166,898,509,296 bytes (the weight shards account for 166,886,535,336 bytes).
-The 48 LFS objects have their public SHA-256 OIDs and sizes locked. For small
-non-LFS files, the public tree API exposes Git blob SHA-1 OIDs instead; the
-verifier computes the Git blob digest from the installed bytes. No hash is
-invented when the public API does not expose it.
-
-The lock fixes the official generation defaults:
-
-- `do_sample: true`
-- `temperature: 1.0`
-- `top_p: 1.0`
-
-The tokenizer configuration must have no `chat_template`; the lock explicitly
-requires the absence of a Jinja template.
-
-## Fetching (not run by this repository)
-
-The model is about 166 GB. Do not run the fetch command unless the destination
-has the required storage, network access, and operator approval:
-
-```bash
-python3 scripts/model/fetch.py /srv/models/deepseek-v4 --dry-run
-python3 scripts/model/fetch.py /srv/models/deepseek-v4
+```text
+<MODEL_ROOT>/
+  config.json
+  generation_config.json
+  LICENSE
+  model.safetensors.index.json
+  tokenizer.json
+  tokenizer_config.json
+  model-*.safetensors
+  .model-lock.sha256
 ```
 
-`--dry-run` reads and validates the lock, prints the exact repository, commit,
-allowlist, and size plan, and makes no network request. A real fetch requires
-the optional `huggingface_hub` package (for example,
-`python3 -m pip install huggingface_hub`) and calls `snapshot_download` with
-the full revision and an exact list of the 54 locked paths. Implicit Hugging
-Face token use is disabled; there is no credential argument, credential file,
-or secret output in this repository. Network/client failures leave no
-installed model.
+`MODEL_ROOT` is the **model directory itself**, named
+`DeepSeek-V4-Flash-0731`. The container mounts that directory read-only at
+`/models/DeepSeek-V4-Flash-0731`, and the rendered vLLM command uses exactly
+that path. Do not point `MODEL_ROOT` at its parent `<REMOTE_PATH>/models`.
 
-The destination must be an absolute directory outside this checkout and must
-not already exist. Downloading occurs in a unique sibling staging directory.
-The fetched tree is checked for symlinks, path escapes, missing/extra files,
-regular-file types, sizes, hashes, JSON metadata, and index/shard closure. Only
-after verification is complete is `.model-lock.sha256` written and the sibling
-directory atomically renamed into place. Existing destinations are never
-replaced.
-
-## Read-only verification
-
-Verify an already-installed tree without network access:
+For manual node diagnostics, define a strict SSH wrapper using the same
+operator-owned key and known-hosts file as the deploy environment:
 
 ```bash
-scripts/model/verify.sh /srv/models/deepseek-v4
-# equivalent:
-python3 scripts/model/verify.py /srv/models/deepseek-v4
+ssh_dgx() {
+  ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=<PATH>/known_hosts -o ConnectTimeout=10 \
+    -i <PATH>/ssh-key "$@"
+}
 ```
 
-Verification reads the lock and requires the marker to equal the SHA-256 of
-the exact `model.lock.json` bytes. It rejects symlinks, unexpected files,
-missing files, size/hash changes, unsafe paths, invalid config/tokenizer/index
-JSON, index references outside the 48-shard set, generation-default changes,
-and a Jinja chat template. It does not repair or modify an installed model.
+## Disk, permissions, and client preflight
 
-This change only establishes the public lock and local fetch/verify boundary.
-It does not download weights, publish artifacts, or change production state.
+The model is approximately 166.9 GB. On each DGX node, confirm storage,
+permissions, and a real directory before downloading:
+
+```bash
+ssh_dgx DGX-SPARK-0 "df -h <REMOTE_PATH> && test -d <REMOTE_PATH> && test -w <REMOTE_PATH>"
+ssh_dgx DGX-SPARK-1 "df -h <REMOTE_PATH> && test -d <REMOTE_PATH> && test -w <REMOTE_PATH>"
+ssh_dgx DGX-SPARK-0 "mkdir -p <REMOTE_PATH>/models && test -d <REMOTE_PATH>/models"
+ssh_dgx DGX-SPARK-1 "mkdir -p <REMOTE_PATH>/models && test -d <REMOTE_PATH>/models"
+```
+
+Install the pinned client version on each node or in the fetch environment:
+
+```bash
+python3 -m pip install 'huggingface_hub==0.34.4'
+python3 -c 'import huggingface_hub; assert huggingface_hub.__version__ == "0.34.4"; print(huggingface_hub.__version__)'
+```
+
+Do not pass a token to these commands. The fetcher sets
+`HF_HUB_DISABLE_IMPLICIT_TOKEN=1` and rejects token/configuration injection.
+
+## Lock-byte digest and marker
+
+The marker is the SHA-256 of the exact bytes of this checkout's
+`model.lock.json`, not a digest of a directory, archive, or downloaded file.
+Compute it before copying a value into the external deployment environment:
+
+```bash
+sha256sum model.lock.json
+```
+
+The output must equal `MODEL_MANIFEST_SHA256` and the contents of
+`<MODEL_ROOT>/.model-lock.sha256` on **both** DGX nodes, with one lowercase
+hex digest followed by a newline. The deployment engine stages this marker as
+part of contract preparation and checks it before container creation.
+
+## Fetch on both DGX nodes
+
+The fetch destination must not already exist; the fetcher creates a sibling
+staging directory and atomically installs a verified model tree. Run the same
+reviewed lock and destination layout on each node:
+
+```bash
+ssh_dgx DGX-SPARK-0 "python3 -m pip install 'huggingface_hub==0.34.4'"
+ssh_dgx DGX-SPARK-1 "python3 -m pip install 'huggingface_hub==0.34.4'"
+ssh_dgx DGX-SPARK-0 "python3 <DEPLOY_CHECKOUT>/scripts/model/fetch.py <REMOTE_PATH>/models/DeepSeek-V4-Flash-0731 --dry-run"
+ssh_dgx DGX-SPARK-1 "python3 <DEPLOY_CHECKOUT>/scripts/model/fetch.py <REMOTE_PATH>/models/DeepSeek-V4-Flash-0731 --dry-run"
+ssh_dgx DGX-SPARK-0 "python3 <DEPLOY_CHECKOUT>/scripts/model/fetch.py <REMOTE_PATH>/models/DeepSeek-V4-Flash-0731"
+ssh_dgx DGX-SPARK-1 "python3 <DEPLOY_CHECKOUT>/scripts/model/fetch.py <REMOTE_PATH>/models/DeepSeek-V4-Flash-0731"
+```
+
+The `--dry-run` path reads and validates the lock, prints the exact repository,
+revision, allowlist, and size plan, and makes no network request. A real fetch
+uses the pinned `huggingface_hub` client and the exact 54-file allowlist. Run
+no fetch until storage, network, and operator approval are ready.
+
+## Full 54-file verification on both nodes
+
+Verify the entire installed tree—not only the marker—on each node:
+
+```bash
+ssh_dgx DGX-SPARK-0 "python3 <DEPLOY_CHECKOUT>/scripts/model/verify.py <REMOTE_PATH>/models/DeepSeek-V4-Flash-0731"
+ssh_dgx DGX-SPARK-1 "python3 <DEPLOY_CHECKOUT>/scripts/model/verify.py <REMOTE_PATH>/models/DeepSeek-V4-Flash-0731"
+```
+
+Verification checks all 54 locked files, regular-file types, symlink/path
+escapes, exact sizes, SHA-256 LFS objects, Git-blob metadata hashes, config,
+tokenizer, index/shard closure, generation defaults, absence of a Jinja chat
+template, and the exact marker. It must pass independently on both nodes.
+
+The deploy engine additionally checks these required runtime files on both
+nodes before mutation:
+
+```text
+<MODEL_ROOT>/config.json
+<MODEL_ROOT>/model.safetensors.index.json
+<MODEL_ROOT>/tokenizer.json
+<MODEL_ROOT>/tokenizer_config.json
+<MODEL_ROOT>/.model-lock.sha256
+```
+
+A missing file, marker mismatch, unexpected file, hash change, or model-root
+layout mismatch stops the deployment. Verification never repairs an installed
+model.
+
+## Troubleshooting
+
+- If fetch says the destination exists, choose a new reviewed destination; it
+  will not overwrite an existing tree.
+- If the marker differs, recompute `sha256sum model.lock.json` from the exact
+  checkout used by the deploy operator and copy only that digest.
+- If one node passes and the other fails, stop deployment and repair the
+  failing node; do not bypass the two-node check.
+- If the runtime reports model-not-found, confirm `MODEL_ROOT` is the exact
+  `DeepSeek-V4-Flash-0731` directory and that the generated mount destination
+  and vLLM model path are both `/models/DeepSeek-V4-Flash-0731`.
+- If the client cannot reach Hugging Face, rerun both dry-runs and inspect
+  network/proxy policy; never enable implicit token use or substitute a tag.

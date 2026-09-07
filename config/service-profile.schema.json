@@ -101,8 +101,8 @@
       "required": ["max_model_len", "max_num_seqs", "max_num_batched_tokens"],
       "properties": {
         "max_model_len": {"const": 327680},
-        "max_num_seqs": {"const": 5},
-        "max_num_batched_tokens": {"const": 1024}
+        "max_num_seqs": {"enum": [5, 10]},
+        "max_num_batched_tokens": {"enum": [1024, 8192]}
       }
     },
     "parsing": {
@@ -131,7 +131,7 @@
       "required": ["lock_path", "candidate_id", "source_refs", "required_labels"],
       "properties": {
         "lock_path": {"const": "image.lock.json"},
-        "candidate_id": {"const": "dsv4-0731-native432-b12x"},
+        "candidate_id": {"enum": ["dsv4-0731-native432-b12x", "dsv4-0731-native432-b12x-seq10"]},
         "source_refs": {
           "type": "object",
           "additionalProperties": false,

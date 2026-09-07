@@ -16,6 +16,7 @@
         "head_host", "worker_host", "head_ssh_host", "worker_ssh_host", "ssh_user", "head_ssh_user", "worker_ssh_user",
         "ssh_port", "ssh_known_hosts_file", "ssh_identity_file", "remote_root", "model_root",
         "registry", "image_ref", "head_image_ref", "worker_image_ref", "image_lock_file",
+        "runtime_max_num_seqs", "runtime_max_num_batched_tokens", "allow_production_images_in_candidate", "production_change_allowed",
         "master_addr", "master_port", "api_port", "head_node_addr",
         "worker_node_addr", "head_net_iface", "worker_net_iface", "head_hca", "worker_hca",
         "head_cuda_visible_devices", "worker_cuda_visible_devices", "roce_gid_index", "roce_mtu",
@@ -54,6 +55,10 @@
         "image_ref": {"type": "string", "pattern": "^(?:[A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}$"},
         "head_image_ref": {"type": "string", "pattern": "^(?:[A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}$"},
         "worker_image_ref": {"type": "string", "pattern": "^(?:[A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}$"},
+        "runtime_max_num_seqs": {"type": "integer", "minimum": 1},
+        "runtime_max_num_batched_tokens": {"type": "integer", "minimum": 1},
+        "allow_production_images_in_candidate": {"type": "boolean"},
+        "production_change_allowed": {"type": "boolean"},
         "image_lock_file": {"$ref": "#/$defs/absolutePath"},
         "master_addr": {"type": "string", "pattern": "^[A-Fa-f0-9:.]+$"},
         "master_port": {"type": "integer", "minimum": 1, "maximum": 65535},
@@ -93,6 +98,20 @@
               "head_hca": {"const": "rocep1s0f1"},
               "worker_hca": {"const": "rocep1s0f1"},
               "roce_mtu": {"const": 9000}
+            }
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {"properties": {"mode": {"const": "production"}}},
+              {"properties": {"production_change_allowed": {"const": false}}}
+            ]
+          },
+          "then": {
+            "properties": {
+              "runtime_max_num_seqs": {"const": 5},
+              "runtime_max_num_batched_tokens": {"const": 1024}
             }
           }
         }

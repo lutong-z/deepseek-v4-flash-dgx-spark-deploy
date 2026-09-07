@@ -37,7 +37,7 @@ class CommandTests(unittest.TestCase):
         command = render_container_argv(self.config, "head")
         self.assertIn("--read-only", command)
         mount = command[command.index("--mount") + 1]
-        self.assertEqual(mount, "type=bind,src=/srv/models,dst=/models,readonly")
+        self.assertEqual(mount, "type=bind,src=/srv/models/DeepSeek-V4-Flash-0731,dst=/models/DeepSeek-V4-Flash-0731,readonly")
         self.assertIn("--security-opt", command)
         self.assertIn("no-new-privileges:true", command)
 
