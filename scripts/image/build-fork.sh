@@ -21,6 +21,7 @@ LOCK_FILE="$DEPLOY_ROOT/image.fork.lock.json"
 
 WORK_DIR=""
 DRY_RUN=false
+PROXY=""
 IMAGE_TAG="vllm-node-b12x:production-20260907"
 FINAL_TAG="production/dsv4-native432-fork:production-20260907"
 PROFILE_SHA256=""
@@ -29,7 +30,7 @@ IMAGE_LOCK_SHA256=""
 
 usage() {
   cat <<'EOF'
-usage: build-fork.sh [--work-dir <path>] [--dry-run]
+usage: build-fork.sh [--work-dir <path>] [--dry-run] [--proxy <url>]
                      [--image-tag <tag>] [--final-tag <tag>]
                      [--profile-sha256 <sha>] [--service-contract-sha256 <sha>]
                      [--image-lock-sha256 <sha>]
@@ -39,6 +40,10 @@ Stages:
            every checkout's HEAD equals image.fork.lock.json
   prepare  point the eugr build preset at the forks and no-op the three
            build-time patches already folded into the vllm branch
+
+Network: when a proxy is set (explicitly or auto-detected), the vllm build
+runs with --network host and BuildKit forwards the proxy variables into the
+build containers, so in-container git/pip traffic uses the loopback proxy.
   vllm     build the vllm+b12x base image (multi-hour CUDA build)
   lmcache  build the lmcache fork wheel inside the base image
   final    install the wheel and stamp the OCI/provenance labels
@@ -55,6 +60,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --work-dir) WORK_DIR="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --proxy) PROXY="$2"; shift 2 ;;
     --image-tag) IMAGE_TAG="$2"; shift 2 ;;
     --final-tag) FINAL_TAG="$2"; shift 2 ;;
     --profile-sha256) PROFILE_SHA256="$2"; shift 2 ;;
@@ -66,6 +72,27 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$WORK_DIR" ]] || { echo "build-fork: --work-dir is required (keeps gigabytes of clones/build cache outside any repository)" >&2; exit 64; }
+
+# --- proxy: explicit --proxy, else auto-detect a local loopback proxy -------
+# DGX nodes in restricted networks run a local proxy (e.g. mihomo/clash on
+# 127.0.0.1:7890); github.com is unreachable directly but reachable via it.
+# BuildKit forwards these env vars into RUN steps as predefined build-args;
+# combined with --network host the in-container git/pip/uv traffic uses the
+# same loopback proxy.
+if [[ -z "$PROXY" ]]; then
+  for candidate in http://127.0.0.1:7890 http://127.0.0.1:7891 http://127.0.0.1:8118; do
+    if timeout 5 curl -s -o /dev/null --proxy "$candidate" https://github.com 2>/dev/null; then
+      PROXY="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -n "$PROXY" ]]; then
+  export https_proxy="$PROXY" http_proxy="$PROXY" HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY"
+  echo "build-fork: using proxy $PROXY"
+else
+  echo "build-fork: no proxy configured; direct network access assumed"
+fi
 [[ -f "$LOCK_FILE" ]] || { echo "build-fork: lock file not found: $LOCK_FILE" >&2; exit 66; }
 
 # --- read coordinates from the lock (python3 stdlib only) -------------------
@@ -179,10 +206,16 @@ done
 
 # --- stage 3: vllm + b12x base image (multi-hour) ---------------------------
 step vllm "build vllm+b12x base image $IMAGE_TAG (multi-hour)"
+NETWORK_ARGS=()
+if [[ -n "$PROXY" ]]; then NETWORK_ARGS=(--network host); fi
 if $DRY_RUN; then
-  printf 'DRY-RUN (cd %s && %s -t %s)\n' "$WORK_DIR/spark-vllm-docker" "$BUILD_COMMAND" "$IMAGE_TAG"
+  printf 'DRY-RUN (cd %s && %s -t %s %s)\n' "$WORK_DIR/spark-vllm-docker" "$BUILD_COMMAND" "$IMAGE_TAG" "${NETWORK_ARGS[*]:-}"
 else
-  (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG")
+  if [[ ${#NETWORK_ARGS[@]} -gt 0 ]]; then
+    (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG" "${NETWORK_ARGS[@]}")
+  else
+    (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG")
+  fi
 fi
 
 # --- stage 4: lmcache fork wheel --------------------------------------------
