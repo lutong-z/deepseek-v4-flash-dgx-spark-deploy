@@ -1852,18 +1852,22 @@ def cmd_resolve_images(args: argparse.Namespace) -> int:
     for index, key in enumerate(keys):
         tag = DEFAULT_IMAGE_TAGS[key]
         comma = "," if index < len(keys) - 1 else ""
+        json_open = '  ' + json.dumps(key) + ': {"reference":"'
+        json_digest = '","digest":"'
+        json_id = '","image_id":"'
+        json_close = '"}' + comma
         lines += [
             f"docker pull --platform {_quote(ARCHITECTURE)} {_quote(tag)} >/dev/null",
             f"ref=$(docker image inspect --format '{{{{index .RepoDigests 0}}}}' {_quote(tag)})",
             "case \"$ref\" in *'@sha256:'*) ;; *) echo 'image has no immutable RepoDigest' >&2; exit 1;; esac",
             f"id=$(docker image inspect --format '{{{{.Id}}}}' {_quote(tag)})",
-            f"printf '%s' {_quote('  ' + json.dumps(key) + ': {"reference":"')} >>\"$tmp\"",
+            f"printf '%s' {_quote(json_open)} >>\"$tmp\"",
             'printf \'%s\' "$ref" >>"$tmp"',
-            f"printf '%s' {_quote('","digest":"')} >>\"$tmp\"",
+            f"printf '%s' {_quote(json_digest)} >>\"$tmp\"",
             'printf \'%s\' "${ref##*@sha256:}" >>"$tmp"',
-            f"printf '%s' {_quote('","image_id":"')} >>\"$tmp\"",
+            f"printf '%s' {_quote(json_id)} >>\"$tmp\"",
             'printf \'%s\' "$id" >>"$tmp"',
-            f"printf '%s\\n' {_quote('"}' + comma)} >>\"$tmp\"",
+            f"printf '%s\\n' {_quote(json_close)} >>\"$tmp\"",
         ]
     lines += ["printf '%s\\n' '}' >>\"$tmp\"", 'cat "$tmp"']
     output_text = _run_local(
