@@ -1,0 +1,63 @@
+{
+  "$id": "https://github.com/lutong-z/deepseek-v4-flash-dgx-spark-deploy/config/image-fork-lock.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DGX Spark fork source build lock",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "vllm",
+    "lmcache",
+    "b12x",
+    "build_system",
+    "folded_in_patches"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "created": {"type": "string"},
+    "purpose": {"type": "string"},
+    "vllm": {"$ref": "#/$defs/source"},
+    "lmcache": {"$ref": "#/$defs/source"},
+    "b12x": {"$ref": "#/$defs/source"},
+    "build_system": {
+      "type": "object",
+      "required": ["repository", "commit", "vllm_repo_override", "vllm_ref_override", "b12x_repo_override", "b12x_ref_override"],
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string", "pattern": "^https://"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "build_command": {"type": "string"},
+        "vllm_repo_override": {"type": "string"},
+        "vllm_ref_override": {"type": "string"},
+        "b12x_repo_override": {"type": "string"},
+        "b12x_ref_override": {"type": "string"}
+      }
+    },
+    "folded_in_patches": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["file", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "file": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "production_verification": {"type": "string"}
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["repository", "ref", "commit"],
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string", "pattern": "^https://"},
+        "ref": {"type": "string", "minLength": 1},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    }
+  }
+}

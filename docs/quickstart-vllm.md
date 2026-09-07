@@ -61,25 +61,29 @@ python3 scripts/model/verify.py <MODEL_ROOT>
 `verify.py` writes/checks `<MODEL_ROOT>/.model-lock.sha256` — the exact
 SHA-256 of `model.lock.json` bytes — which the deploy stage re-checks.
 
-### 3. Image: load the reviewed ARM64 service image
+### 3. Image: build from fork sources, or load a prebuilt one
 
-The service image is built from the reviewed forks
-([`image.md`](image.md)); this repository ships the label layer in
-`container/Containerfile` and the lock schema, not the 25 GB payload. Fastest
-paths to a node, in order:
+The reviewed build is one command on a DGX node — the three forks are cloned
+at the pinned commits of [`image.fork.lock.json`](../image.fork.lock.json) and
+the image is built from source with **zero patches** (every change is
+committed in the forks):
 
 ```bash
-# (a) image archive already transferred
+# (a) one-command source build on a DGX node (multi-hour, the reviewed path)
+scripts/image/build-fork.sh --work-dir <EXTERNAL_BUILD_DIR> --dry-run
+scripts/image/build-fork.sh --work-dir <EXTERNAL_BUILD_DIR>
+
+# (b) image archive already transferred
 ssh_dgx DGX-SPARK-0 "sha256sum -c <REMOTE_PATH>/head.tar.sha256 && docker load --input <REMOTE_PATH>/head.tar"
 ssh_dgx DGX-SPARK-1 "sha256sum -c <REMOTE_PATH>/worker.tar.sha256 && docker load --input <REMOTE_PATH>/worker.tar"
 
-# (b) registry RepoDigest already published
+# (c) registry RepoDigest already published
 #     put <PRODUCTION_HEAD_IMAGE_REF> / <PRODUCTION_WORKER_IMAGE_REF> as
 #     repository@sha256:<digest> in the external lock; nodes pull on create
 ```
 
-If neither is available you must build from the forks (hours), covered in
-[`image.md`](image.md). There is no magic 10-minute build for this profile.
+Details and label requirements are in [`image.md`](image.md). There is no
+magic 10-minute build for this profile.
 
 ### 4. Environment + lock
 

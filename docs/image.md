@@ -6,6 +6,40 @@ all build metadata and behavioral evidence are independently complete. A site
 must create an external `status: "ready"` deployment lock before any image can
 be used by `dgx-deploy` lifecycle commands.
 
+## Build from fork sources (one command)
+
+The reviewed way to produce the ~25 GB service image is
+[`scripts/image/build-fork.sh`](../scripts/image/build-fork.sh), driven by the
+committed coordinates in [`image.fork.lock.json`](../image.fork.lock.json):
+
+```bash
+# on an ARM64 DGX Spark node with Docker (multi-hour CUDA build)
+git clone <DEPLOY_REPOSITORY_URL> <DEPLOY_CHECKOUT> && cd <DEPLOY_CHECKOUT>
+scripts/image/build-fork.sh --work-dir <EXTERNAL_BUILD_DIR> --dry-run   # review the plan
+scripts/image/build-fork.sh --work-dir <EXTERNAL_BUILD_DIR>
+```
+
+The script clones the three forks at the pinned commits — **vllm**
+`release/production-20260907`, **LMCache** `feat/native432-mp-connector`,
+**b12x** `release/dsv4-0731-native432` — plus the same eugr/spark-vllm-docker
+build system (commit `e9cf3596`) that produced the running production image,
+retargets its B12X preset at the forks, and builds. **No patch is applied at
+image-build time**: the three build-time patches the production pipeline used
+are already committed in the vllm fork branch (see `folded_in_patches` in the
+lock) and are stubbed to no-ops during the build.
+
+Every coordinate was verified on 2026-09-07 by SHA-256 over every installed
+Python file against the live production containers: the vllm branch matches
+the production engine byte-for-byte (2,226 files) except six parser files
+carrying the reviewed DSML fix (upstream PR 52645 port); b12x matches 234/234;
+the LMCache connector branch is the union of both production rollout variants.
+Details are in the lock's `production_verification` field.
+
+Pass `--profile-sha256`, `--service-contract-sha256`, and
+`--image-lock-sha256` to stamp all seven required labels in one build. When
+omitted, those three labels are empty and must be filled with the
+metadata-only child flow below before the image can enter a ready lock.
+
 ## Inputs and immutable identities
 
 A deployable role image must be:

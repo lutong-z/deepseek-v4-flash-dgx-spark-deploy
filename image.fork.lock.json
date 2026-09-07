@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "created": "2026-09-07",
+  "purpose": "One-command production image build from the three fork source trees. Every coordinate below was verified byte-for-byte (SHA-256 over every installed .py) against the live production containers on 2026-09-07: engine dsv4-native432-lmcache-head (52d606ea), engine worker (cfda6985), lmcache-server head (af5c963f), lmcache-server worker (b1b0360b). The vllm branch carries production content plus the reviewed DSML parser fix (upstream PR 52645 port, patches/stable-fp8/0002). lmcache uses the unified connector branch: it is the union of the two production rollout variants (engine incident-fix + server streaming-restore), each change already validated 21h+ on its own side.",
+  "vllm": {
+    "repository": "https://github.com/lutong-z/vllm.git",
+    "ref": "release/production-20260907",
+    "commit": "cd3ab2e8de208aa79cb901e4e6557acb3698931e"
+  },
+  "lmcache": {
+    "repository": "https://github.com/lutong-z/LMCache.git",
+    "ref": "feat/native432-mp-connector",
+    "commit": "501ed9570ce40821b604b267807e7e477d9e51ca"
+  },
+  "b12x": {
+    "repository": "https://github.com/lutong-z/b12x.git",
+    "ref": "release/dsv4-0731-native432",
+    "commit": "d476465883cc7e46c128e0effa89fad1a7200cd7"
+  },
+  "build_system": {
+    "repository": "https://github.com/eugr/spark-vllm-docker.git",
+    "commit": "e9cf3596c4d8ecd677056b1d14eb5dda16c1f86e",
+    "build_command": "./build-and-copy.sh --exp-b12x",
+    "vllm_repo_override": "https://github.com/lutong-z/vllm",
+    "vllm_ref_override": "release/production-20260907",
+    "b12x_repo_override": "https://github.com/lutong-z/b12x.git",
+    "b12x_ref_override": "release/dsv4-0731-native432"
+  },
+  "folded_in_patches": [
+    {
+      "file": "docker/patch_vllm_flashinfer_b12x_swigluoai.py",
+      "reason": "FlashInfer B12x SwiGLU-OAI passthrough + NVFP4 oracle selection is committed in the vllm fork branch (verified identical to production)."
+    },
+    {
+      "file": "docker/patch_vllm_disable_minimax_qk_rmsnorm_ipc.py",
+      "reason": "MiniMax QK RMSNorm CUDA IPC disable is committed in the vllm fork branch (verified identical to production)."
+    },
+    {
+      "file": "docker/patch_vllm_spark_kv_cache_cleanup.py",
+      "reason": "Spark KV cache cleanup (pre-transient_peak_headroom semantics, node-old revision) is committed in the vllm fork branch (verified identical to production)."
+    }
+  ],
+  "production_verification": "vllm branch tree vs production engine container: 2226 .py files identical, only build-generated files (_version.py, third_party/, vllm_flash_attn/cute/) absent from git, 6 parser files carrying the reviewed DSML patch differ by intent. b12x: 234/234 identical. lmcache connector branch is the superset of both production variants."
+}
