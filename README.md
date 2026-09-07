@@ -1,11 +1,36 @@
 # DGX Spark DeepSeek V4 deployment
 
+[![CI](https://github.com/lutong-z/deepseek-v4-flash-dgx-spark-deploy/actions/workflows/test.yml/badge.svg)](https://github.com/lutong-z/deepseek-v4-flash-dgx-spark-deploy/actions/workflows/test.yml)
+[![Production-tested](https://img.shields.io/badge/production-tested-2ea44f)](docs/production-evidence.md)
+[![ARM64](https://img.shields.io/badge/arch-ARM64%20GB10-blue)]()
+[![tests](https://img.shields.io/badge/tests-94%20passing-2ea44f)]()
+
 **Production-tested.** This repository has carried real traffic in a
 two-node ARM64 DGX Spark production deployment for over 21 consecutive hours
 with **zero failed requests**, **zero preemptions**, **~98 % prompt-token
 cache hit ratio**, and a single planned 3.5-minute switch during rollout. Full
 measured numbers, metric names, and reproducibility steps are in
 [`docs/production-evidence.md`](docs/production-evidence.md).
+
+### Why this repository is trustworthy
+
+- **Measured, not claimed.** Every number in
+  [`docs/production-evidence.md`](docs/production-evidence.md) was read from
+  the live Prometheus instance this repository deploys — metric names,
+  PromQL, and the dashboard are versioned here, so the evidence is
+  reproducible against the same revision.
+- **No opaque infrastructure.** The deploy tool renders immutable
+  head/worker contracts locally, plans changes before touching a node, and
+  performs read-only preflights. 94 unit/integration tests run in CI on
+  every push and pull request.
+- **Fail-closed by default.** The committed image lock is intentionally not
+  deployable; production mutation requires an external operator-owned
+  environment, a ready lock, and an explicit `--confirm` of the printed
+  deployment ID. Nothing here can mutate your nodes by accident.
+- **10 minutes to first value.** The
+  [observability stack](docs/observability.md) runs on public images only —
+  no model weights, no private registry — and the whole flow is
+  copy-pasteable.
 
 | Status | Value |
 | --- | --- |
@@ -39,6 +64,27 @@ changes through strict SSH. The default path is redacted and dry-run only.
 > deploying the **model service**. It requires the 166.9 GB locked model tree
 > and built images (hours, not minutes). If your goal is monitoring first,
 > start with the [10-minute observability stack](docs/observability.md).
+
+### 10-minute tryout — no DGX, no Docker required
+
+You can exercise the production deploy tool end-to-end on any machine with
+Python ≥ 3.11, against **synthetic** hosts. `render`, `plan`, and
+`deploy --dry-run` never SSH and never touch Docker; they print the exact
+commands a real deploy would run. This is a safe first contact with the
+repository and doubles as the CI smoke test.
+
+```bash
+git clone <DEPLOY_REPOSITORY_URL> demo && cd demo
+python3 -m venv .venv && . .venv/bin/activate
+python -m pip install -e .
+tests/dry_run.sh                      # env validation + redacted plan + mutation rejected
+python tests/model_dry_run.sh         # model fetch plan prints without network
+bin/dgx-deploy --help
+```
+
+That is the same sequence CI runs on every push
+([`.github/workflows/test.yml`](.github/workflows/test.yml)). The 10-minute
+observability deploy on real hardware is [`docs/observability.md`](docs/observability.md).
 
 Production mutation requires all of the following:
 

@@ -57,3 +57,4 @@ weights/
 # OS/editor noise
 .DS_Store
 *~
+*.egg-info/
