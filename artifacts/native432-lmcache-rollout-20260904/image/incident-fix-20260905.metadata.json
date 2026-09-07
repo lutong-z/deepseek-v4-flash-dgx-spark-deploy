@@ -1,0 +1,24 @@
+{
+  "base_images": {
+    "head": "sha256:efce8b7fec691d8d2dc60e2ff69123219dca325f2c2158a210ce44074b72920d",
+    "worker": "sha256:c0fd40d8b59d5fc2b4de9ae35aff9eb3cac2f1656bda1d6b953f1ebcb9362e7a"
+  },
+  "derived_images": {
+    "head": "sha256:52d606ea024b7dd3d38960f98ce546c389796383d2a575a82fde13264ba2190e",
+    "worker": "sha256:cfda698594440294c1c08e448621b15233ea57028529f388e2d86edd069e931f"
+  },
+  "contract": "2026-09-05 incident fix: hybrid (multi-group) KV invalid-block recovery no longer crashes the engine on single-group unpack; external KV load failures retry with a fresh lookup before recompute; session-tagged requests' freed blocks are protected from prefix-cache eviction; LMCache heartbeat PING timeout is decoupled from the ping interval and logs its failure reason. Additionally, a failed retrieve on the healthy path now reports its GPU blocks as load errors (previously logged and dropped, resuming generation on garbage KV).",
+  "files": [
+    "vllm/v1/core/sched/scheduler.py",
+    "vllm/v1/core/block_pool.py",
+    "vllm/v1/core/kv_cache_utils.py",
+    "vllm/v1/request.py",
+    "vllm/envs.py",
+    "vllm/distributed/kv_transfer/kv_connector/v1/base.py",
+    "lmcache/integration/vllm/vllm_multi_process_adapter.py",
+    "lmcache/integration/vllm/lmcache_mp_connector.py"
+  ],
+  "builder": "image/incident-fix-20260905/build.sh",
+  "schema_version": 1,
+  "source_commit": "9350335e841497decd018a8735e7e221cd0b0c84"
+}

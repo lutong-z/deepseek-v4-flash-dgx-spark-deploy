@@ -1,0 +1,21 @@
+{
+  "base_images": {
+    "head": "sha256:efce8b7fec691d8d2dc60e2ff69123219dca325f2c2158a210ce44074b72920d",
+    "worker": "sha256:c0fd40d8b59d5fc2b4de9ae35aff9eb3cac2f1656bda1d6b953f1ebcb9362e7a"
+  },
+  "derived_images": {
+    "head": "sha256:af5c963faa0e6d086011cf3870f2b8e7e9f00a0b622b7d3d40d1047704b598c1",
+    "worker": "sha256:b1b0360b0b32c89a97c6eae44bee57ff9f37ff0c75beb016c2bee7c2713da43d"
+  },
+  "contract": "2026-09-05 streaming restore (LMCache server): L1 write reservations run in bounded prefix-ordered windows (--l2-prefetch-l1-reserve-batch-keys=32); out-of-memory degrades to the longest reservable prefix instead of the all-or-nothing abort, while contention still aborts the whole load; retrieve streams H2D per chunk window (--l2-retrieve-window-chunks=16), releasing each window's L1 read locks in stream order, so a large restore never holds the whole prefix in L1. Retrieve completion logs bind request_id; failures log expected vs actual key/token counts at ERROR.",
+  "files": [
+    "lmcache/v1/distributed/config.py",
+    "lmcache/v1/distributed/storage_controllers/prefetch_controller.py",
+    "lmcache/v1/distributed/storage_manager.py",
+    "lmcache/v1/multiprocess/engine_context.py",
+    "lmcache/v1/multiprocess/modules/lmcache_driven_transfer.py"
+  ],
+  "builder": "image/streaming-restore-20260905/build.sh",
+  "schema_version": 1,
+  "source_commit": "worktree:dgx-lmcache-dcp-inspect"
+}

@@ -1,0 +1,415 @@
+diff --git a/vllm/config/cache.py b/vllm/config/cache.py
+index 55ed87802f..99aaa07a52 100644
+--- a/vllm/config/cache.py
++++ b/vllm/config/cache.py
+@@ -96,6 +96,12 @@ class CacheConfig:
+     `ModelConfig` and that value should be manually duplicated here."""
+     enable_prefix_caching: bool = True
+     """Whether to enable prefix caching."""
++    prefix_cache_idle_timeout_seconds: float | None = Field(default=None, gt=0)
++    """Expire cached GPU blocks after this many idle seconds.
++
++    Expiration applies only after a block becomes unreferenced. Active and
++    shared blocks are never expired. ``None`` preserves capacity-driven LRU.
++    """
+     prefix_caching_hash_algo: PrefixCachingHashAlgo = "sha256"
+     """Set the hash algorithm for prefix caching:
+ 
+@@ -218,6 +224,7 @@ class CacheConfig:
+             "num_gpu_blocks_override",
+             "enable_prefix_caching",
+             "prefix_caching_hash_algo",
++            "prefix_cache_idle_timeout_seconds",
+             # Prefix-caching implementation detail (doesn't affect compiled graph).
+             "prefix_match_unit",
+             "mamba_page_size_padded",
+@@ -254,6 +261,17 @@ class CacheConfig:
+             return value
+         return handler(value)
+ 
++    @model_validator(mode="after")
++    def _validate_prefix_cache_idle_timeout(self) -> "CacheConfig":
++        if (
++            self.prefix_cache_idle_timeout_seconds is not None
++            and not self.enable_prefix_caching
++        ):
++            raise ValueError(
++                "prefix_cache_idle_timeout_seconds requires prefix caching"
++            )
++        return self
++
+     @model_validator(mode="after")
+     def _apply_block_size_default(self) -> "CacheConfig":
+         # Pydantic re-runs validators when CacheConfig is nested inside
+diff --git a/vllm/engine/arg_utils.py b/vllm/engine/arg_utils.py
+index 89e98ae7c6..dd62569ed0 100644
+--- a/vllm/engine/arg_utils.py
++++ b/vllm/engine/arg_utils.py
+@@ -520,6 +520,9 @@ class EngineArgs:
+     prefix_caching_hash_algo: PrefixCachingHashAlgo = (
+         CacheConfig.prefix_caching_hash_algo
+     )
++    prefix_cache_idle_timeout_seconds: float | None = (
++        CacheConfig.prefix_cache_idle_timeout_seconds
++    )
+     disable_sliding_window: bool = ModelConfig.disable_sliding_window
+     disable_cascade_attn: bool = ModelConfig.disable_cascade_attn
+     offload_backend: str = OffloadConfig.offload_backend
+@@ -1218,6 +1221,10 @@ class EngineArgs:
+         cache_group.add_argument(
+             "--prefix-caching-hash-algo", **cache_kwargs["prefix_caching_hash_algo"]
+         )
++        cache_group.add_argument(
++            "--prefix-cache-idle-timeout-seconds",
++            **cache_kwargs["prefix_cache_idle_timeout_seconds"],
++        )
+         cache_group.add_argument(
+             "--kv-cache-dtype-skip-layers", **cache_kwargs["kv_cache_dtype_skip_layers"]
+         )
+@@ -2003,6 +2010,7 @@ class EngineArgs:
+             sliding_window=sliding_window,
+             enable_prefix_caching=self.enable_prefix_caching,
+             prefix_caching_hash_algo=self.prefix_caching_hash_algo,
++            prefix_cache_idle_timeout_seconds=self.prefix_cache_idle_timeout_seconds,
+             kv_cache_dtype_skip_layers=self.kv_cache_dtype_skip_layers,
+             kv_sharing_fast_prefill=self.kv_sharing_fast_prefill,
+             mamba_cache_dtype=self.mamba_cache_dtype,
+diff --git a/vllm/v1/core/block_pool.py b/vllm/v1/core/block_pool.py
+index 4ca1ab1fdb..314aa7ac2a 100644
+--- a/vllm/v1/core/block_pool.py
++++ b/vllm/v1/core/block_pool.py
+@@ -1,5 +1,6 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++import time
+ from collections.abc import Iterable, Sequence
+ from typing import Any
+ 
+@@ -156,7 +157,10 @@ class BlockPool:
+             where different KV cache groups have different block sizes, the
+             actual block size can be a multiple of hash_block_size.
+         enable_kv_cache_events: Whether to enable kv cache events.
+-        metrics_collector: Optional metrics collector for tracking block residency.
++        metrics_collector: Optional metrics collector for tracking block
++            residency.
++        prefix_cache_idle_timeout_seconds: Expire unreferenced cached blocks
++            after this many idle seconds. ``None`` disables expiration.
+     """
+ 
+     def __init__(
+@@ -166,11 +170,25 @@ class BlockPool:
+         hash_block_size: int,
+         enable_kv_cache_events: bool = False,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        prefix_cache_idle_timeout_seconds: float | None = None,
+     ):
+         assert isinstance(num_gpu_blocks, int) and num_gpu_blocks > 0
+         self.num_gpu_blocks = num_gpu_blocks
+         self.enable_caching = enable_caching
+         self.hash_block_size = hash_block_size
++        if prefix_cache_idle_timeout_seconds is not None:
++            if not enable_caching:
++                raise ValueError("prefix cache idle expiration requires prefix caching")
++            if prefix_cache_idle_timeout_seconds <= 0:
++                raise ValueError(
++                    "prefix_cache_idle_timeout_seconds must be greater than 0"
++                )
++            self.prefix_cache_idle_timeout_ns: int | None = max(
++                1, round(prefix_cache_idle_timeout_seconds * 1e9)
++            )
++        else:
++            self.prefix_cache_idle_timeout_ns = None
++        self._next_prefix_cache_expiry_ns: int | None = None
+         # All kv-cache blocks.
+         self.blocks: list[KVCacheBlock] = [
+             KVCacheBlock(idx) for idx in range(num_gpu_blocks)
+@@ -701,6 +719,41 @@ class BlockPool:
+         self._emit_block_removed_events(evicted_hashes)
+         return True
+ 
++    def expire_cached_blocks(self) -> int:
++        """Expire free cached blocks whose idle timeout has elapsed."""
++        timeout_ns = self.prefix_cache_idle_timeout_ns
++        next_expiry_ns = self._next_prefix_cache_expiry_ns
++        if timeout_ns is None or next_expiry_ns is None:
++            return 0
++
++        now_ns = time.monotonic_ns()
++        if now_ns < next_expiry_ns:
++            return 0
++
++        expired_blocks: list[KVCacheBlock] = []
++        next_expiry_ns = None
++        for block in self.free_block_queue.iter_blocks_after(None):
++            if block.block_hash is None:
++                continue
++            idle_since_ns = block.cache_idle_since_ns
++            assert idle_since_ns is not None
++            block_expiry_ns = idle_since_ns + timeout_ns
++            if block_expiry_ns <= now_ns:
++                expired_blocks.append(block)
++            elif next_expiry_ns is None or block_expiry_ns < next_expiry_ns:
++                next_expiry_ns = block_expiry_ns
++
++        removed_hashes: list[BlockHashWithGroupId] = []
++        for block in expired_blocks:
++            self.free_block_queue.remove(block)
++            if self.metrics_collector:
++                self.metrics_collector.on_block_evicted(block)
++            removed_hashes.extend(self._remove_cached_block_hashes(block))
++        self.free_block_queue.prepend_n(expired_blocks)
++        self._emit_block_removed_events(removed_hashes)
++        self._next_prefix_cache_expiry_ns = next_expiry_ns
++        return len(expired_blocks)
++
+     def touch(self, blocks: Sequence[KVCacheBlock]) -> None:
+         """Touch a block increases its reference count by 1, and may remove
+         the block from the free queue. This is used when a block is hit by
+@@ -714,6 +767,7 @@ class BlockPool:
+             # candidate), so remove it.
+             if block.ref_cnt == 0 and not block.is_null:
+                 self.free_block_queue.remove(block)
++                block.cache_idle_since_ns = None
+             block.ref_cnt += 1
+             if self.metrics_collector:
+                 self.metrics_collector.on_block_accessed(block)
+@@ -738,6 +792,16 @@ class BlockPool:
+                     blocks_without_hash.append(block)
+                 else:
+                     blocks_with_hash.append(block)
++        if blocks_with_hash and self.prefix_cache_idle_timeout_ns is not None:
++            idle_since_ns = time.monotonic_ns()
++            for block in blocks_with_hash:
++                block.cache_idle_since_ns = idle_since_ns
++            expiry_ns = idle_since_ns + self.prefix_cache_idle_timeout_ns
++            if (
++                self._next_prefix_cache_expiry_ns is None
++                or expiry_ns < self._next_prefix_cache_expiry_ns
++            ):
++                self._next_prefix_cache_expiry_ns = expiry_ns
+ 
+         # Blocks without hash get evicted first - prepend them last to the tail
+         self.free_block_queue.prepend_n(blocks_without_hash)
+@@ -787,6 +851,7 @@ class BlockPool:
+         # Remove all hashes from all blocks.
+         for block in self.blocks:
+             block.reset_hash()
++        self._next_prefix_cache_expiry_ns = None
+ 
+         if self.metrics_collector:
+             self.metrics_collector.reset()
+diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
+index a0ca8fd9bf..2d37b096cc 100644
+--- a/vllm/v1/core/kv_cache_coordinator.py
++++ b/vllm/v1/core/kv_cache_coordinator.py
+@@ -77,6 +77,7 @@ class KVCacheCoordinator(ABC):
+         scheduler_block_size: int,
+         hash_block_size: int,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        prefix_cache_idle_timeout_seconds: float | None = None,
+     ):
+         self.kv_cache_config = kv_cache_config
+         self.max_model_len = max_model_len
+@@ -95,6 +96,7 @@ class KVCacheCoordinator(ABC):
+             hash_block_size=hash_block_size,
+             enable_kv_cache_events=enable_kv_cache_events,
+             metrics_collector=metrics_collector,
++            prefix_cache_idle_timeout_seconds=prefix_cache_idle_timeout_seconds,
+         )
+ 
+         # KV cache group indices that get the EAGLE last-block drop.
+@@ -493,6 +495,7 @@ class KVCacheCoordinatorNoPrefixCache(KVCacheCoordinator):
+         scheduler_block_size: int,
+         hash_block_size: int,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        prefix_cache_idle_timeout_seconds: float | None = None,
+     ):
+         super().__init__(
+             kv_cache_config,
+@@ -506,6 +509,7 @@ class KVCacheCoordinatorNoPrefixCache(KVCacheCoordinator):
+             scheduler_block_size=scheduler_block_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            prefix_cache_idle_timeout_seconds=prefix_cache_idle_timeout_seconds,
+         )
+         self.num_single_type_manager = len(self.single_type_managers)
+ 
+@@ -543,6 +547,7 @@ class UnitaryKVCacheCoordinator(KVCacheCoordinator):
+         scheduler_block_size: int,
+         hash_block_size: int,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        prefix_cache_idle_timeout_seconds: float | None = None,
+     ):
+         super().__init__(
+             kv_cache_config,
+@@ -556,6 +561,7 @@ class UnitaryKVCacheCoordinator(KVCacheCoordinator):
+             scheduler_block_size=scheduler_block_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            prefix_cache_idle_timeout_seconds=prefix_cache_idle_timeout_seconds,
+         )
+         self.kv_cache_spec = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec
+         self.block_size = self.kv_cache_spec.block_size
+@@ -628,6 +634,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+         scheduler_block_size: int,
+         hash_block_size: int,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        prefix_cache_idle_timeout_seconds: float | None = None,
+     ):
+         super().__init__(
+             kv_cache_config,
+@@ -641,6 +648,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+             scheduler_block_size=scheduler_block_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            prefix_cache_idle_timeout_seconds=prefix_cache_idle_timeout_seconds,
+         )
+         # hash_block_size: the block size used to compute block hashes.
+         # The actual block size usually equals hash_block_size, but in cases where
+@@ -1025,6 +1033,7 @@ def get_kv_cache_coordinator(
+     scheduler_block_size: int,
+     hash_block_size: int,
+     metrics_collector: KVCacheMetricsCollector | None = None,
++    prefix_cache_idle_timeout_seconds: float | None = None,
+ ) -> KVCacheCoordinator:
+     if not enable_caching:
+         return KVCacheCoordinatorNoPrefixCache(
+@@ -1038,6 +1047,7 @@ def get_kv_cache_coordinator(
+             scheduler_block_size=scheduler_block_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            prefix_cache_idle_timeout_seconds=prefix_cache_idle_timeout_seconds,
+         )
+     if len(kv_cache_config.kv_cache_groups) == 1:
+         return UnitaryKVCacheCoordinator(
+@@ -1052,6 +1062,7 @@ def get_kv_cache_coordinator(
+             scheduler_block_size=scheduler_block_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            prefix_cache_idle_timeout_seconds=prefix_cache_idle_timeout_seconds,
+         )
+     return HybridKVCacheCoordinator(
+         kv_cache_config,
+@@ -1065,4 +1076,5 @@ def get_kv_cache_coordinator(
+         scheduler_block_size=scheduler_block_size,
+         hash_block_size=hash_block_size,
+         metrics_collector=metrics_collector,
++        prefix_cache_idle_timeout_seconds=prefix_cache_idle_timeout_seconds,
+     )
+diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
+index ca1fb73420..bf869cfded 100644
+--- a/vllm/v1/core/kv_cache_manager.py
++++ b/vllm/v1/core/kv_cache_manager.py
+@@ -131,6 +131,7 @@ class KVCacheManager:
+         pcp_world_size: int = 1,
+         metrics_collector: KVCacheMetricsCollector | None = None,
+         watermark: float = 0.0,
++        prefix_cache_idle_timeout_seconds: float | None = None,
+     ) -> None:
+         self.max_model_len = max_model_len
+         # When unset, fall back to `max_model_len` so the recycling-aware cap
+@@ -161,6 +162,7 @@ class KVCacheManager:
+             scheduler_block_size=scheduler_block_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=self.metrics_collector,
++            prefix_cache_idle_timeout_seconds=prefix_cache_idle_timeout_seconds,
+         )
+         self.num_kv_cache_groups = len(kv_cache_config.kv_cache_groups)
+         self.block_pool = self.coordinator.block_pool
+@@ -881,5 +883,8 @@ class KVCacheManager:
+         return offloads
+ 
+     def new_step_starts(self) -> None:
+-        """Notify the coordinator that a new step is starting."""
++        """Advance per-step state and expire idle prefix-cache blocks."""
+         self.coordinator.new_step_starts()
++        expired_blocks = self.block_pool.expire_cached_blocks()
++        if self.prefix_cache_stats is not None:
++            self.prefix_cache_stats.expired_blocks += expired_blocks
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 52069da8e7..93c1669280 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -130,6 +130,8 @@ class KVCacheBlock:
+     # Number of prefix tokens covered by _block_hash. For full blocks this is
+     # the full block boundary; partial entries can end inside a cache block.
+     _block_hash_num_tokens: int | None = None
++    # Monotonic timestamp set only while a cached block is unreferenced.
++    cache_idle_since_ns: int | None = None
+ 
+     # Used to construct a doubly linked list for free blocks.
+     # These two attributes should only be manipulated by FreeKVCacheBlockQueue.
+@@ -162,6 +164,7 @@ class KVCacheBlock:
+         """Reset the block hash when the block is evicted."""
+         self._block_hash = None
+         self._block_hash_num_tokens = None
++        self.cache_idle_since_ns = None
+ 
+     def __repr__(self) -> str:
+         # Use block_id instead of KVCacheBlock object to avoid calling __repr__
+@@ -173,6 +176,7 @@ class KVCacheBlock:
+             f"ref_cnt={self.ref_cnt}, "
+             f"_block_hash={self._block_hash!r}, "
+             f"_block_hash_num_tokens={self._block_hash_num_tokens}, "
++            f"cache_idle_since_ns={self.cache_idle_since_ns}, "
+             f"prev_free_block={prev_block_id}, "
+             f"next_free_block={next_block_id})"
+         )
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index ff576e2bc5..d185a5fea2 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -288,6 +288,9 @@ class Scheduler(SchedulerInterface):
+             hash_block_size=hash_block_size,
+             metrics_collector=self.kv_metrics_collector,
+             watermark=self.scheduler_config.watermark,
++            prefix_cache_idle_timeout_seconds=(
++                self.cache_config.prefix_cache_idle_timeout_seconds
++            ),
+         )
+         # Bind GPU block pool to the KV connector. This must happen after
+         # kv_cache_manager is constructed so block_pool is available.
+diff --git a/vllm/v1/metrics/loggers.py b/vllm/v1/metrics/loggers.py
+index 743c791454..f4d251c130 100644
+--- a/vllm/v1/metrics/loggers.py
++++ b/vllm/v1/metrics/loggers.py
+@@ -604,6 +604,16 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
+         self.counter_prefix_cache_hits = create_metric_per_engine(
+             counter_prefix_cache_hits, per_engine_labelvalues
+         )
++        counter_prefix_cache_expired_blocks = self._counter_cls(
++            name="vllm:prefix_cache_expired_blocks",
++            documentation=(
++                "GPU prefix cache blocks expired after their configured idle timeout."
++            ),
++            labelnames=labelnames,
++        )
++        self.counter_prefix_cache_expired_blocks = create_metric_per_engine(
++            counter_prefix_cache_expired_blocks, per_engine_labelvalues
++        )
+ 
+         #
+         # External - KV connector prefix cache
+@@ -1132,6 +1142,9 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
+             self.counter_prefix_cache_hits[engine_idx].inc(
+                 scheduler_stats.prefix_cache_stats.hits
+             )
++            self.counter_prefix_cache_expired_blocks[engine_idx].inc(
++                scheduler_stats.prefix_cache_stats.expired_blocks
++            )
+ 
+             if scheduler_stats.connector_prefix_cache_stats is not None:
+                 self.counter_connector_prefix_cache_queries[engine_idx].inc(
+diff --git a/vllm/v1/metrics/stats.py b/vllm/v1/metrics/stats.py
+index ff8f90795c..4d27c497d2 100644
+--- a/vllm/v1/metrics/stats.py
++++ b/vllm/v1/metrics/stats.py
+@@ -127,6 +127,8 @@ class PrefixCacheStats(BaseCacheStats):
+ 
+     preempted_hits: int = 0
+     """The `hits` number for preempted requests."""
++    expired_blocks: int = 0
++    """The number of idle GPU cache blocks expired in this update."""
+ 
+     def record(self, num_tokens: int, num_hits: int, preempted: bool) -> None:
+         """Aggregate request information into the stats."""

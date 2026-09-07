@@ -7,7 +7,8 @@
 /results/
 /logs/
 /cache/
-/artifacts/
+/artifacts/*
+!/artifacts/native432-lmcache-rollout-20260904/
 
 # Python and local tooling
 __pycache__/

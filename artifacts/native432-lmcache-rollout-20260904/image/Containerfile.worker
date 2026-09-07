@@ -1,0 +1,7 @@
+FROM native432-lmcache:worker-fork
+COPY prefix-cache-idle-ttl.patch /tmp/prefix-cache-idle-ttl.patch
+RUN cd /usr/local/lib/python3.12/dist-packages \
+ && patch --batch --forward -p1 < /tmp/prefix-cache-idle-ttl.patch \
+ && rm /tmp/prefix-cache-idle-ttl.patch
+LABEL com.dgx-spark.vllm.runtime-patch-sha256="1c8cf55a6ec686973405708f46948512b35338d5d2e9e7dd143ca8ffb5a4e909" \
+      com.dgx-spark.prefix-cache-idle-timeout-seconds="300"

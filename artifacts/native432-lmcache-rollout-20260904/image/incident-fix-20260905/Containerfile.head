@@ -1,0 +1,2 @@
+FROM native432-lmcache:head-ttl-v1
+COPY overlay/ /usr/local/lib/python3.12/dist-packages/

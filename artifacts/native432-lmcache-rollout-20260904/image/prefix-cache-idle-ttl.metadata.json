@@ -1,0 +1,25 @@
+{
+  "base_images": {
+    "head": "sha256:1e508adb13d2112167e910be7d6b899b413dffea3fc07ed22edc4ae10992ab8b",
+    "worker": "sha256:18b9dfbd1ebcede78f1a563e2bc9f47a9263a2a222d03f21cf67fd2d017df49d"
+  },
+  "derived_images": {
+    "head": "sha256:efce8b7fec691d8d2dc60e2ff69123219dca325f2c2158a210ce44074b72920d",
+    "worker": "sha256:c0fd40d8b59d5fc2b4de9ae35aff9eb3cac2f1656bda1d6b953f1ebcb9362e7a"
+  },
+  "contract": "Expire unreferenced local GPU prefix-cache blocks after an optional idle timeout; active and shared blocks remain valid.",
+  "files": [
+    "vllm/config/cache.py",
+    "vllm/engine/arg_utils.py",
+    "vllm/v1/core/kv_cache_utils.py",
+    "vllm/v1/core/block_pool.py",
+    "vllm/v1/core/kv_cache_coordinator.py",
+    "vllm/v1/core/kv_cache_manager.py",
+    "vllm/v1/core/sched/scheduler.py",
+    "vllm/v1/metrics/stats.py",
+    "vllm/v1/metrics/loggers.py"
+  ],
+  "patch_sha256": "1c8cf55a6ec686973405708f46948512b35338d5d2e9e7dd143ca8ffb5a4e909",
+  "schema_version": 1,
+  "source_commit": "b5f995e73e6b7fe27c9927477e277a151ebcc9e9"
+}
