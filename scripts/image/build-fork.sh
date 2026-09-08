@@ -214,58 +214,66 @@ EOF
   grep -q "SKIP: patch folded into fork source" "$target" || { echo "build-fork: stub write failed for $target" >&2; exit 1; }
 done
 
-# BuildKit only forwards the host proxy into RUN steps when the Dockerfile
-# declares the proxy ARGs; the eugr Dockerfile declares none, so in-container
-# pip/git go direct and get cut off (observed: truncated PyPI JSON). Declare
-# them before the first FROM so every stage inherits the host values. ARG
-# values never persist into the final image environment.
+# ARG declarations must live INSIDE each build stage: Docker only expands an
+# ARG in a stage's RUN environment when it is declared after that stage's
+# FROM. A declaration before the first FROM is global-only and invisible to
+# RUN (observed: mirror/proxy ARGs before the first FROM had no effect, pip
+# kept hitting the default index). Inject after every FROM, and pass the
+# proxy values explicitly via --build-arg because this docker's BuildKit does
+# not auto-forward host proxy variables (observed: RUN env shows no proxy).
+# Idempotent: injected lines are stripped first, then re-added.
 DOCKERFILE="$WORK_DIR/spark-vllm-docker/Dockerfile"
+inject_args() {
+  python3 - "$DOCKERFILE" "$PYPI_MIRROR" <<'PY'
+import sys
+path, mirror = sys.argv[1], sys.argv[2]
+managed = ("ARG HTTP_PROXY", "ARG HTTPS_PROXY", "ARG http_proxy",
+           "ARG https_proxy", "ARG PIP_INDEX_URL", "ARG UV_INDEX_URL")
+lines = [l for l in open(path).read().splitlines(keepends=True)
+         if not l.startswith(managed)]
+block = "ARG HTTP_PROXY\nARG HTTPS_PROXY\nARG http_proxy\nARG https_proxy\n"
+if mirror:
+    block += f"ARG PIP_INDEX_URL={mirror}\nARG UV_INDEX_URL={mirror}\n"
+out, injections = [], 0
+for line in lines:
+    out.append(line)
+    if line.startswith("FROM "):
+        out.append(block)
+        injections += 1
+if injections == 0:
+    raise SystemExit(f"{path}: no FROM anchor found for ARG injection")
+open(path, "w").write("".join(out))
+print(f"injected ARGs after {injections} FROM lines")
+PY
+}
 if $DRY_RUN; then
-  printf 'DRY-RUN inject proxy ARG declarations into %s\n' "$DOCKERFILE"
+  printf 'DRY-RUN inject per-stage ARG declarations (proxy%s) into %s\n' \
+    "${PYPI_MIRROR:+, mirror=$PYPI_MIRROR}" "$DOCKERFILE"
 else
-  if ! grep -q '^ARG HTTP_PROXY' "$DOCKERFILE"; then
-    python3 - "$DOCKERFILE" <<'PY'
+  inject_args
+  grep -c '^ARG PIP_INDEX_URL' "$DOCKERFILE" || true
+fi
+
+# Pass proxy values explicitly: BuildKit on this host does not auto-forward.
+if $DRY_RUN; then
+  printf 'DRY-RUN append explicit proxy --build-arg flags to COMMON_BUILD_FLAGS\n'
+else
+  if ! grep -q 'build-arg" "\$PROXY_BUILD_ARG' "$BUILD_SH"; then
+    python3 - "$BUILD_SH" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
-lines = text.splitlines(keepends=True)
-for i, line in enumerate(lines):
-    if line.startswith("FROM ") or line.startswith("ARG "):
-        lines.insert(i, "ARG HTTP_PROXY\nARG HTTPS_PROXY\nARG http_proxy\nARG https_proxy\n")
-        break
-else:
-    raise SystemExit(f"{path}: no FROM/ARG anchor found for proxy ARG injection")
-open(path, "w").write("".join(lines))
-PY
-    grep -q '^ARG HTTP_PROXY' "$DOCKERFILE" || { echo "build-fork: proxy ARG injection failed" >&2; exit 1; }
-  fi
-fi
-
-# Optional PyPI mirror for networks where files.pythonhosted.org is dead or
-# the proxy is too slow for GB-scale wheels (observed: ~20 kB/s via proxy,
-# hash-mismatch on truncated uv wheel; 10 MB/s via a regional mirror).
-# Injected as ARG with a default so it is visible in every RUN environment
-# without persisting into the final image config.
-if [[ -n "$PYPI_MIRROR" ]]; then
-  if $DRY_RUN; then
-    printf 'DRY-RUN inject PIP_INDEX_URL/UV_INDEX_URL=%s into %s\n' "$PYPI_MIRROR" "$DOCKERFILE"
-  else
-    if ! grep -q '^ARG PIP_INDEX_URL' "$DOCKERFILE"; then
-      python3 - "$DOCKERFILE" "$PYPI_MIRROR" <<'PY'
-import sys
-path, mirror = sys.argv[1], sys.argv[2]
-text = open(path).read()
-lines = text.splitlines(keepends=True)
-for i, line in enumerate(lines):
-    if line.startswith("FROM ") or line.startswith("ARG "):
-        lines.insert(i, f"ARG PIP_INDEX_URL={mirror}\nARG UV_INDEX_URL={mirror}\n")
-        break
-else:
-    raise SystemExit(f"{path}: no FROM/ARG anchor found for mirror injection")
-open(path, "w").write("".join(lines))
-PY
-      grep -q '^ARG PIP_INDEX_URL' "$DOCKERFILE" || { echo "build-fork: mirror injection failed" >&2; exit 1; }
+anchor = 'if [ -n "$NETWORK_ARG" ]; then\n    COMMON_BUILD_FLAGS+=("--network" "$NETWORK_ARG")\nfi'
+assert anchor in text, f"{path}: COMMON_BUILD_FLAGS network anchor not found"
+addition = anchor + '''
+for PROXY_BUILD_ARG in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy; do
+    if [ -n "${!PROXY_BUILD_ARG:-}" ]; then
+        COMMON_BUILD_FLAGS+=("--build-arg" "$PROXY_BUILD_ARG=${!PROXY_BUILD_ARG}")
     fi
+done'''
+open(path, "w").write(text.replace(anchor, addition, 1))
+PY
+    grep -q 'PROXY_BUILD_ARG' "$BUILD_SH" || { echo "build-fork: build-arg injection failed" >&2; exit 1; }
   fi
 fi
 
