@@ -136,10 +136,10 @@ run() {
     "$@"
   fi
 }
-clone_at() { # <repo> <ref> <expected-commit> <dest>
-  local repo="$1" ref="$2" want="$3" dest="$4"
+clone_at() { # <repo> <ref> <expected-commit> <dest> [need_tags]
+  local repo="$1" ref="$2" want="$3" dest="$4" need_tags="${5:-}"
   if $DRY_RUN; then
-    if [[ "$ref" == "$want" ]]; then
+    if [[ "$ref" == "$want" || "$need_tags" == "need_tags" ]]; then
       printf 'DRY-RUN git clone --filter=blob:none %s %s && checkout %s\n' "$repo" "$dest" "$want"
     else
       printf 'DRY-RUN git clone --depth 1 --branch %s %s %s && verify HEAD == %s\n' "$ref" "$repo" "$dest" "$want"
@@ -147,11 +147,13 @@ clone_at() { # <repo> <ref> <expected-commit> <dest>
     return
   fi
   if [[ ! -d "$dest/.git" ]]; then
-    if [[ "$ref" == "$want" ]]; then
-      # Ref is a raw commit (build system): partial clone, checkout by sha.
+    if [[ "$ref" == "$want" || "$need_tags" == "need_tags" ]]; then
+      # Raw commit ref, or a branch whose setuptools_scm version needs the
+      # full tag history (lmcache): partial clone keeps all refs/tags, blobs
+      # fetched on demand.
       git clone --filter=blob:none "$repo" "$dest" >/dev/null
     else
-      # Ref is a branch: shallow clone of just that branch.
+      # Branch used only for lock verification: shallow clone suffices.
       git clone --depth 1 --branch "$ref" "$repo" "$dest" >/dev/null
     fi
   fi
@@ -164,19 +166,23 @@ clone_at() { # <repo> <ref> <expected-commit> <dest>
 # --- stage 1: fetch ---------------------------------------------------------
 step fetch "clone forks and build system, verify commits"
 clone_at "$VLLM_REPO" "$VLLM_REF" "$VLLM_COMMIT" "$WORK_DIR/vllm"
-clone_at "$LMCACHE_REPO" "$LMCACHE_REF" "$LMCACHE_COMMIT" "$WORK_DIR/lmcache"
+clone_at "$LMCACHE_REPO" "$LMCACHE_REF" "$LMCACHE_COMMIT" "$WORK_DIR/lmcache" need_tags
 clone_at "$B12X_REPO" "$B12X_REF" "$B12X_COMMIT" "$WORK_DIR/b12x"
 clone_at "$BUILD_SYS_REPO" "$BUILD_SYS_COMMIT" "$BUILD_SYS_COMMIT" "$WORK_DIR/spark-vllm-docker"
 
 # --- stage 2: prepare -------------------------------------------------------
 step prepare "point eugr preset at the forks; no-op folded-in patches"
 BUILD_SH="$WORK_DIR/spark-vllm-docker/build-and-copy.sh"
-DOCKER_DIR="$WORK_DIR/spark-vllm-docker/docker"
-
-retarget() { # <file> <old> <new> — exact one-line replacement, verified
+retarget() { # <file> <old> <new> — exact one-line replacement, verified; idempotent
   local file="$1" old="$2" new="$3"
   if $DRY_RUN; then printf 'DRY-RUN retarget %s: %s -> %s\n' "$file" "$old" "$new"; return; fi
-  grep -qF "$old" "$file" || { echo "build-fork: expected line not found in $file: $old" >&2; exit 1; }
+  if ! grep -qF "$old" "$file"; then
+    if grep -qF "$new" "$file"; then
+      echo "build-fork: $file already retargeted; skipping"
+      return
+    fi
+    echo "build-fork: expected line not found in $file: $old" >&2; exit 1
+  fi
   python3 - "$file" "$old" "$new" <<'PY'
 import sys
 path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -208,22 +214,16 @@ done
 
 # --- stage 3: vllm + b12x base image (multi-hour) ---------------------------
 step vllm "build vllm+b12x base image $IMAGE_TAG (multi-hour)"
-NETWORK_ARGS=()
-if [[ -n "$PROXY" ]]; then NETWORK_ARGS=(--network host); fi
-JOB_ARGS=()
-if [[ -n "$BUILD_JOBS" ]]; then JOB_ARGS=(--build-jobs "$BUILD_JOBS"); fi
+# --rebuild-vllm is mandatory, not optional: without it the eugr preset pulls
+# its prebuilt runner image (someone else's vllm+b12x) and never compiles the
+# fork sources — the exact failure this script exists to prevent.
+BUILD_ARGS=(--rebuild-vllm)
+if [[ -n "$PROXY" ]]; then BUILD_ARGS+=(--network host); fi
+if [[ -n "$BUILD_JOBS" ]]; then BUILD_ARGS+=(--build-jobs "$BUILD_JOBS"); fi
 if $DRY_RUN; then
-  printf 'DRY-RUN (cd %s && %s -t %s %s %s)\n' "$WORK_DIR/spark-vllm-docker" "$BUILD_COMMAND" "$IMAGE_TAG" "${NETWORK_ARGS[*]:-}" "${JOB_ARGS[*]:-}"
+  printf 'DRY-RUN (cd %s && %s -t %s %s)\n' "$WORK_DIR/spark-vllm-docker" "$BUILD_COMMAND" "$IMAGE_TAG" "${BUILD_ARGS[*]:-}"
 else
-  if [[ ${#NETWORK_ARGS[@]} -gt 0 && ${#JOB_ARGS[@]} -gt 0 ]]; then
-    (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG" "${NETWORK_ARGS[@]}" "${JOB_ARGS[@]}")
-  elif [[ ${#NETWORK_ARGS[@]} -gt 0 ]]; then
-    (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG" "${NETWORK_ARGS[@]}")
-  elif [[ ${#JOB_ARGS[@]} -gt 0 ]]; then
-    (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG" "${JOB_ARGS[@]}")
-  else
-    (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG")
-  fi
+  (cd "$WORK_DIR/spark-vllm-docker" && $BUILD_COMMAND -t "$IMAGE_TAG" "${BUILD_ARGS[@]}")
 fi
 # --- stage 4: lmcache fork wheel --------------------------------------------
 step lmcache "build lmcache fork wheel inside the base image"
