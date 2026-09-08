@@ -212,6 +212,33 @@ EOF
   grep -q "SKIP: patch folded into fork source" "$target" || { echo "build-fork: stub write failed for $target" >&2; exit 1; }
 done
 
+# BuildKit only forwards the host proxy into RUN steps when the Dockerfile
+# declares the proxy ARGs; the eugr Dockerfile declares none, so in-container
+# pip/git go direct and get cut off (observed: truncated PyPI JSON). Declare
+# them before the first FROM so every stage inherits the host values. ARG
+# values never persist into the final image environment.
+DOCKERFILE="$WORK_DIR/spark-vllm-docker/Dockerfile"
+if $DRY_RUN; then
+  printf 'DRY-RUN inject proxy ARG declarations into %s\n' "$DOCKERFILE"
+else
+  if ! grep -q '^ARG HTTP_PROXY' "$DOCKERFILE"; then
+    python3 - "$DOCKERFILE" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+lines = text.splitlines(keepends=True)
+for i, line in enumerate(lines):
+    if line.startswith("FROM ") or line.startswith("ARG "):
+        lines.insert(i, "ARG HTTP_PROXY\nARG HTTPS_PROXY\nARG http_proxy\nARG https_proxy\n")
+        break
+else:
+    raise SystemExit(f"{path}: no FROM/ARG anchor found for proxy ARG injection")
+open(path, "w").write("".join(lines))
+PY
+    grep -q '^ARG HTTP_PROXY' "$DOCKERFILE" || { echo "build-fork: proxy ARG injection failed" >&2; exit 1; }
+  fi
+fi
+
 # --- stage 3: vllm + b12x base image (multi-hour) ---------------------------
 step vllm "build vllm+b12x base image $IMAGE_TAG (multi-hour)"
 # --rebuild-vllm is mandatory, not optional: without it the eugr preset pulls
