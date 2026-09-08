@@ -46,7 +46,19 @@
         }
       }
     },
-    "production_verification": {"type": "string"}
+    "production_verification": {"type": "string"},
+    "registry": {
+      "type": "object",
+      "required": ["reference", "tag"],
+      "additionalProperties": false,
+      "properties": {
+        "reference": {"type": "string", "pattern": "^ghcr\\.io/.+@sha256:[0-9a-f]{64}$"},
+        "tag": {"type": "string"},
+        "pushed": {"type": "string"},
+        "size_gb": {"type": "number"},
+        "contents_verified": {"type": "string"}
+      }
+    },
   },
   "$defs": {
     "source": {
