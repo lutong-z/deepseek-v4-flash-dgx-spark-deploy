@@ -58,7 +58,7 @@
         "size_gb": {"type": "number"},
         "contents_verified": {"type": "string"}
       }
-    },
+    }
   },
   "$defs": {
     "source": {
