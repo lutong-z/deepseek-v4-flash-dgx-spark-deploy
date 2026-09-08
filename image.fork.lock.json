@@ -41,11 +41,11 @@
     }
   ],
   "registry": {
-    "reference": "ghcr.io/lutong-z/dsv4-native432-fork@sha256:44000f0e46bc0e722474f13ef64f2fb5c52231af6e67b0b39f0b591d8e7f4054",
+    "reference": "ghcr.io/lutong-z/dsv4-native432-fork@sha256:657fa50f9600bf7b13d39375ec09c37e0e50ede58b8569605fc340ad548c4547",
     "tag": "ghcr.io/lutong-z/dsv4-native432-fork:production-20260907",
     "pushed": "2026-09-08",
     "size_gb": 24.4,
-    "contents_verified": "vllm 2232/2232 files match the verified fork branch (production + DSML parser fix), lmcache 713/713 match the unified connector branch, b12x 234/234 match d476465; verified 2026-09-08 by SHA-256 over every installed .py inside the built image"
+    "contents_verified": "vllm 2232/2232 files match the verified fork branch (production + DSML parser fix), lmcache 713/713 match the unified connector branch, b12x 234/234 match d476465; verified 2026-09-08 by SHA-256 over every installed .py inside the built image. The tagged manifest carries org.opencontainers.image.source linking the package to this repository; the recorded digest is that label-child manifest (rootfs identical to the build output)."
   },
   "production_verification": "vllm branch tree vs production engine container: 2226 .py files identical, only build-generated files (_version.py, third_party/, vllm_flash_attn/cute/) absent from git, 6 parser files carrying the reviewed DSML patch differ by intent. b12x: 234/234 identical. lmcache connector branch is the superset of both production variants."
 }

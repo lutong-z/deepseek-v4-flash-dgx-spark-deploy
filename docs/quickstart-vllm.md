@@ -61,25 +61,24 @@ python3 scripts/model/verify.py <MODEL_ROOT>
 `verify.py` writes/checks `<MODEL_ROOT>/.model-lock.sha256` — the exact
 SHA-256 of `model.lock.json` bytes — which the deploy stage re-checks.
 
-### 3. Image: build from fork sources, or load a prebuilt one
+### 3. Image: pull the prebuilt image, or build from fork sources
 
-The reviewed build is one command on a DGX node — the three forks are cloned
-at the pinned commits of [`image.fork.lock.json`](../image.fork.lock.json) and
-the image is built from source with **zero patches** (every change is
-committed in the forks):
+The fastest path is the **prebuilt production-tested image** published from
+this repository's fork lock — contents verified byte-for-byte against the
+running production service (see
+[`image.fork.lock.json`](../image.fork.lock.json) `registry`):
 
 ```bash
-# (a) one-command source build on a DGX node (multi-hour, the reviewed path)
+# (a) pull the prebuilt image (no build; ~24 GB download)
+docker pull ghcr.io/lutong-z/dsv4-native432-fork@sha256:657fa50f9600bf7b13d39375ec09c37e0e50ede58b8569605fc340ad548c4547
+
+# (b) one-command source build on a DGX node (multi-hour, the reviewed path)
 scripts/image/build-fork.sh --work-dir <EXTERNAL_BUILD_DIR> --dry-run
 scripts/image/build-fork.sh --work-dir <EXTERNAL_BUILD_DIR>
 
-# (b) image archive already transferred
+# (c) image archive already transferred
 ssh_dgx DGX-SPARK-0 "sha256sum -c <REMOTE_PATH>/head.tar.sha256 && docker load --input <REMOTE_PATH>/head.tar"
 ssh_dgx DGX-SPARK-1 "sha256sum -c <REMOTE_PATH>/worker.tar.sha256 && docker load --input <REMOTE_PATH>/worker.tar"
-
-# (c) registry RepoDigest already published
-#     put <PRODUCTION_HEAD_IMAGE_REF> / <PRODUCTION_WORKER_IMAGE_REF> as
-#     repository@sha256:<digest> in the external lock; nodes pull on create
 ```
 
 Details and label requirements are in [`image.md`](image.md). There is no

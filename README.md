@@ -206,11 +206,13 @@ or silently accepts a missing marker.
 
 ### 4. Prepare immutable production images
 
-If you do not have a validated parent image yet, build one from the fork
-sources with a single command — `scripts/image/build-fork.sh` clones the three
-forks at the pinned commits of [`image.fork.lock.json`](image.fork.lock.json)
-(production-verified byte-for-byte against the running service) and builds
-the ~25 GB image with zero build-time patches. See
+If you do not have a validated parent image yet, the fastest path is the
+**prebuilt production-tested image** published at
+`ghcr.io/lutong-z/dsv4-native432-fork` (see `registry` in
+[`image.fork.lock.json`](image.fork.lock.json)) — its contents are verified
+byte-for-byte against the running production service. To rebuild instead,
+`scripts/image/build-fork.sh` clones the three forks at the pinned commits of
+the lock and builds the ~25 GB image with zero build-time patches. See
 [`docs/image.md`](docs/image.md#build-from-fork-sources-one-command).
 
 Use only validated production inputs. A failed candidate image or a candidate
