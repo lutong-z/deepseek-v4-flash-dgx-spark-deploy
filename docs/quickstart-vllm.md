@@ -69,8 +69,9 @@ running production service (see
 [`image.fork.lock.json`](../image.fork.lock.json) `registry`):
 
 ```bash
-# (a) pull the prebuilt image (no build; ~24 GB download)
-docker pull ghcr.io/lutong-z/dsv4-native432-fork@sha256:657fa50f9600bf7b13d39375ec09c37e0e50ede58b8569605fc340ad548c4547
+# (a) pull the prebuilt image (no build; ~24 GB download). For deployment
+#     locks use the immutable digest from image.fork.lock.json "registry".
+docker pull ghcr.io/lutong-z/dsv4-native432-fork:production-20260907
 
 # (b) one-command source build on a DGX node (multi-hour, the reviewed path)
 scripts/image/build-fork.sh --work-dir <EXTERNAL_BUILD_DIR> --dry-run
