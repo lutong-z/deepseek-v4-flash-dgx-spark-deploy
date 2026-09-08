@@ -231,7 +231,13 @@ if $DRY_RUN; then
   printf 'DRY-RUN docker run --rm -v <lmcache>:/src %s pip wheel lmcache fork\n' "$IMAGE_TAG"
 else
   mkdir -p "$WORK_DIR/lmcache-wheel"
-  docker run --rm \
+  WHEEL_NET=()
+  if [[ -n "$PROXY" ]]; then
+    WHEEL_NET=(--network host
+      -e "https_proxy=$PROXY" -e "http_proxy=$PROXY"
+      -e "HTTPS_PROXY=$PROXY" -e "HTTP_PROXY=$PROXY")
+  fi
+  docker run --rm "${WHEEL_NET[@]}" \
     -v "$WORK_DIR/lmcache":/src:ro \
     -v "$WORK_DIR/lmcache-wheel":/out \
     "$IMAGE_TAG" bash -c '
