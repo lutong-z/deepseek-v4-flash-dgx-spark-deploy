@@ -22,6 +22,7 @@ LOCK_FILE="$DEPLOY_ROOT/image.fork.lock.json"
 WORK_DIR=""
 DRY_RUN=false
 PROXY=""
+PYPI_MIRROR=""
 BUILD_JOBS=""
 IMAGE_TAG="vllm-node-b12x:production-20260907"
 FINAL_TAG="production/dsv4-native432-fork:production-20260907"
@@ -59,6 +60,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --pypi-mirror) PYPI_MIRROR="$2"; shift 2 ;;
     --work-dir) WORK_DIR="$2"; shift 2 ;;
     --build-jobs) BUILD_JOBS="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
@@ -236,6 +238,34 @@ else:
 open(path, "w").write("".join(lines))
 PY
     grep -q '^ARG HTTP_PROXY' "$DOCKERFILE" || { echo "build-fork: proxy ARG injection failed" >&2; exit 1; }
+  fi
+fi
+
+# Optional PyPI mirror for networks where files.pythonhosted.org is dead or
+# the proxy is too slow for GB-scale wheels (observed: ~20 kB/s via proxy,
+# hash-mismatch on truncated uv wheel; 10 MB/s via a regional mirror).
+# Injected as ARG with a default so it is visible in every RUN environment
+# without persisting into the final image config.
+if [[ -n "$PYPI_MIRROR" ]]; then
+  if $DRY_RUN; then
+    printf 'DRY-RUN inject PIP_INDEX_URL/UV_INDEX_URL=%s into %s\n' "$PYPI_MIRROR" "$DOCKERFILE"
+  else
+    if ! grep -q '^ARG PIP_INDEX_URL' "$DOCKERFILE"; then
+      python3 - "$DOCKERFILE" "$PYPI_MIRROR" <<'PY'
+import sys
+path, mirror = sys.argv[1], sys.argv[2]
+text = open(path).read()
+lines = text.splitlines(keepends=True)
+for i, line in enumerate(lines):
+    if line.startswith("FROM ") or line.startswith("ARG "):
+        lines.insert(i, f"ARG PIP_INDEX_URL={mirror}\nARG UV_INDEX_URL={mirror}\n")
+        break
+else:
+    raise SystemExit(f"{path}: no FROM/ARG anchor found for mirror injection")
+open(path, "w").write("".join(lines))
+PY
+      grep -q '^ARG PIP_INDEX_URL' "$DOCKERFILE" || { echo "build-fork: mirror injection failed" >&2; exit 1; }
+    fi
   fi
 fi
 
