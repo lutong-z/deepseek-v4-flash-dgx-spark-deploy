@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "created": "2026-09-07",
-  "purpose": "One-command production image build from the three fork source trees. Every coordinate below was verified byte-for-byte (SHA-256 over every installed .py) against the live production containers on 2026-09-07: engine dsv4-native432-lmcache-head (52d606ea), engine worker (cfda6985), lmcache-server head (af5c963f), lmcache-server worker (b1b0360b). The vllm branch carries production content plus the reviewed DSML parser fix (upstream PR 52645 port, patches/stable-fp8/0002). lmcache uses the unified connector branch: it is the union of the two production rollout variants (engine incident-fix + server streaming-restore), each change already validated 21h+ on its own side.",
+  "created": "2026-09-27",
+  "purpose": "One-command production image build from the three fork source trees. vllm branch release/production-20260907 now carries the 52645 DSML orphan-invoke recovery (cd3ab2e8, from 2026-09-07) plus the string-attribute-optional parameter fix (9f3648f, port of upstream main _param_patterns; missing string=\"true|false\" on a DSML parameter no longer drops the argument). lmcache uses the unified connector branch: it is the union of the two production rollout variants (engine incident-fix + server streaming-restore), each change already validated 21h+ on its own side.",
   "vllm": {
     "repository": "https://github.com/lutong-z/vllm.git",
     "ref": "release/production-20260907",
-    "commit": "cd3ab2e8de208aa79cb901e4e6557acb3698931e"
+    "commit": "9f3648fd4725e8da771c8c9a15cf578506e73c89"
   },
   "lmcache": {
     "repository": "https://github.com/lutong-z/LMCache.git",
@@ -45,7 +45,7 @@
     "tag": "ghcr.io/lutong-z/dsv4-native432-fork:production-20260907",
     "pushed": "2026-09-08",
     "size_gb": 24.4,
-    "contents_verified": "vllm 2232/2232 files match the verified fork branch (production + DSML parser fix), lmcache 713/713 match the unified connector branch, b12x 234/234 match d476465; verified 2026-09-08 by SHA-256 over every installed .py inside the built image. The tagged manifest carries org.opencontainers.image.source linking the package to this repository; the recorded digest is that label-child manifest (rootfs identical to the build output)."
+    "contents_verified": "PREVIOUS build (vllm 9f3648f-1, cd3ab2e8): vllm 2232/2232 files match the verified fork branch, lmcache 713/713, b12x 234/234. Digest/registry below reflect image production-20260907 built from cd3ab2e8; rebuild from 9f3648f and re-verify before promotion."
   },
   "production_verification": "vllm branch tree vs production engine container: 2226 .py files identical, only build-generated files (_version.py, third_party/, vllm_flash_attn/cute/) absent from git, 6 parser files carrying the reviewed DSML patch differ by intent. b12x: 234/234 identical. lmcache connector branch is the superset of both production variants."
 }
